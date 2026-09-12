@@ -54,6 +54,8 @@ def build_nodes(docs: list[CorpusItem]) -> list[TextNode]:
 def vectorize_docs(
     docs: list[CorpusItem],
     collection_name: str,
+    embed_batch_size: int = settings.openai_emb_batch_size,
+    num_workers: int = settings.openai_emb_num_workers,
 ) -> VectorStoreIndex:
     nodes = build_nodes(docs)
     qdrant_client = QdrantClient(url=settings.qdrant_url)
@@ -66,8 +68,8 @@ def vectorize_docs(
         api_base=settings.openai_emb_api_base,
         api_key=settings.openai_emb_api_key,
         model=settings.openai_emb_model,
-        embed_batch_size=256,
-        num_workers=3,
+        embed_batch_size=embed_batch_size,
+        num_workers=num_workers,
     )
     index = VectorStoreIndex.from_documents(
         nodes,

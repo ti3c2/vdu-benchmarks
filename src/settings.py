@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     openai_emb_api_key: str = ""
     openai_emb_api_base: str = "https://api.openai.com/v1"
     openai_emb_model: str = "text-embedding-3-small"
+    openai_emb_batch_size: int = 256
+    openai_emb_num_workers: int = 3
 
     openai_max_retries: int = 3
     openai_timeout: int = 600 * 1000
