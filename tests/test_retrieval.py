@@ -132,10 +132,7 @@ def test_persisted_stages_reuse_query_vectors(monkeypatch, mode):
         vectorize, "create_dense_model", lambda *args: MockEmbedding(embed_dim=2)
     )
     monkeypatch.setattr(vectorize, "encode_dense", fake_encode)
-    monkeypatch.setattr(
-        "src.evaluate.model_endpoints.verify_model_endpoint",
-        skip_preflight,
-    )
+    monkeypatch.setattr(vectorize, "verify_embedding_endpoint", skip_preflight)
     monkeypatch.setattr(
         "src.stor_rel.crud.implementation_provenance",
         lambda: {"implementation_sha256": "test-vectors"},
@@ -363,10 +360,7 @@ def test_image_page_hybrid_reads_minio_and_persists_page_points(monkeypatch):
         vectorize, "create_dense_model", lambda *args: MockEmbedding(embed_dim=2)
     )
     monkeypatch.setattr(vectorize, "encode_dense", fake_encode)
-    monkeypatch.setattr(
-        "src.evaluate.model_endpoints.verify_model_endpoint",
-        skip_preflight,
-    )
+    monkeypatch.setattr(vectorize, "verify_embedding_endpoint", skip_preflight)
     monkeypatch.setattr(
         "src.stor_rel.crud.implementation_provenance",
         lambda: {"implementation_sha256": "test-vectors"},

@@ -15,7 +15,7 @@ embeddings:
       api_key_env: OPENAI_EMB_API_KEY
     space_id: qwen3-embedding-8b-dense-v1
     modality: text
-    dimensions: 1024
+    dimensions: 4096
   batch_size: 256
 corpus_unit: chunk
 retrieval:

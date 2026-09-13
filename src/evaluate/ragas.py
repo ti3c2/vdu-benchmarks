@@ -17,7 +17,10 @@ from src.config import RagasConfig
 from src.evaluate.generation import CONTEXT_RENDERERS, render_page
 from src.evaluate.ir import persist_aggregates
 from src.evaluate.metrics import resolve_metric
-from src.evaluate.model_endpoints import verify_model_endpoint
+from src.evaluate.model_endpoints import (
+    verify_embedding_endpoint,
+    verify_model_endpoint,
+)
 from src.stor_obj import ObjectStore
 from src.stor_rel.crud import (
     find_records,
@@ -105,9 +108,7 @@ async def verify_ragas_endpoints(config: RagasConfig):
     if config.embeddings and any(
         _metric_needs_embeddings(metric) for metric in config.metrics
     ):
-        await verify_model_endpoint(
-            config.embeddings.endpoint, purpose="Ragas embedding"
-        )
+        await verify_embedding_endpoint(config.embeddings, purpose="Ragas embedding")
 
 
 def create_metrics(config: RagasConfig):

@@ -14,7 +14,7 @@ from src.evaluate.embeddings import (
     create_dense_model,
     encode_dense,
 )
-from src.evaluate.model_endpoints import verify_model_endpoint
+from src.evaluate.model_endpoints import verify_embedding_endpoint
 from src.evaluate.vector_store import create_vector_store
 from src.stor_rel.crud import (
     find_records,
@@ -198,7 +198,7 @@ async def _vectorize(
     failed = 0
     try:
         if config.dense:
-            await verify_model_endpoint(config.dense.endpoint, purpose="embedding")
+            await verify_embedding_endpoint(config.dense)
             dense_model = create_dense_model(config.dense, config.batch_size)
         # A resumed collection can establish inferred dimensions without a new model call.
         exists = await store.collection_exists()
