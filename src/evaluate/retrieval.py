@@ -25,6 +25,7 @@ from src.stor_rel.schema import (
     StageRun,
 )
 from src.stor_rel.vector_queries import persist_ranking
+from src.utils.progress import progress_bar
 
 logger = logging.getLogger(__name__)
 
@@ -167,70 +168,84 @@ async def run_retrieval(
                 "group_size": 1,
             },
         )
-        for offset in range(0, len(query_ids), 64):
-            batch = query_ids[offset : offset + 64]
-            vectors = await query_store.load_vectors(batch)
-            for query_id in batch:
-                previous = await find_records(
-                    Retrieval, run_id=run.id, query_id=query_id
-                )
-                existing = previous[0] if previous else None
-                if existing and existing.status == "completed":
-                    completed += 1
-                    previous_hits = await find_records(
-                        RetrievalHit, retrieval_id=existing.id
+        with progress_bar(
+            total=len(query_ids), desc="Retrieving pages", unit="query"
+        ) as progress:
+            for offset in range(0, len(query_ids), 64):
+                batch = query_ids[offset : offset + 64]
+                vectors = await query_store.load_vectors(batch)
+                for query_id in batch:
+                    previous = await find_records(
+                        Retrieval, run_id=run.id, query_id=query_id
                     )
-                    if len(previous_hits) < config.page_top_k:
-                        shortfalls += 1
-                    continue
-                retrieval = await upsert_record(
-                    Retrieval,
-                    {"run_id": run.id, "query_id": query_id},
-                    {"dataset_id": run.dataset_id, "status": "running", "error": None},
-                )
-                item = await upsert_record(
-                    RunItem,
-                    {"run_id": run.id, "query_id": query_id},
-                    {"dataset_id": run.dataset_id, "status": "running", "error": None},
-                )
-                await update_record(RunItem, item.id, attempts=item.attempts + 1)
-                started = time.perf_counter()
-                try:
-                    saved = vectors.get(str(query_id))
-                    if saved is None:
-                        raise ValueError(
-                            f"Persisted query vectors are missing for {query_id}"
+                    existing = previous[0] if previous else None
+                    if existing and existing.status == "completed":
+                        completed += 1
+                        previous_hits = await find_records(
+                            RetrievalHit, retrieval_id=existing.id
                         )
-                    groups = await corpus_store.retrieve_pages(
-                        saved,
-                        mode=config.mode,
-                        page_top_k=config.page_top_k,
-                        prefetch_limit=prefetch,
-                    )
-                    hits = rank_page_groups(groups, run.dataset_id)
-                    if len(hits) < config.page_top_k:
-                        shortfalls += 1
-                    await persist_ranking(
-                        run.dataset_id,
-                        retrieval.id,
-                        item.id,
-                        hits,
-                        (time.perf_counter() - started) * 1000,
-                    )
-                    completed += 1
-                except Exception as error:
-                    logger.exception("Retrieval failed for query %s", query_id)
-                    await update_record(
+                        if len(previous_hits) < config.page_top_k:
+                            shortfalls += 1
+                        progress.update()
+                        continue
+                    retrieval = await upsert_record(
                         Retrieval,
-                        retrieval.id,
-                        status="failed",
-                        error=str(error),
-                        latency_ms=(time.perf_counter() - started) * 1000,
+                        {"run_id": run.id, "query_id": query_id},
+                        {
+                            "dataset_id": run.dataset_id,
+                            "status": "running",
+                            "error": None,
+                        },
                     )
-                    await update_record(
-                        RunItem, item.id, status="failed", error=str(error)
+                    item = await upsert_record(
+                        RunItem,
+                        {"run_id": run.id, "query_id": query_id},
+                        {
+                            "dataset_id": run.dataset_id,
+                            "status": "running",
+                            "error": None,
+                        },
                     )
-                    failed += 1
+                    await update_record(RunItem, item.id, attempts=item.attempts + 1)
+                    started = time.perf_counter()
+                    try:
+                        saved = vectors.get(str(query_id))
+                        if saved is None:
+                            raise ValueError(
+                                f"Persisted query vectors are missing for {query_id}"
+                            )
+                        groups = await corpus_store.retrieve_pages(
+                            saved,
+                            mode=config.mode,
+                            page_top_k=config.page_top_k,
+                            prefetch_limit=prefetch,
+                        )
+                        hits = rank_page_groups(groups, run.dataset_id)
+                        if len(hits) < config.page_top_k:
+                            shortfalls += 1
+                        await persist_ranking(
+                            run.dataset_id,
+                            retrieval.id,
+                            item.id,
+                            hits,
+                            (time.perf_counter() - started) * 1000,
+                        )
+                        completed += 1
+                    except Exception as error:
+                        logger.exception("Retrieval failed for query %s", query_id)
+                        await update_record(
+                            Retrieval,
+                            retrieval.id,
+                            status="failed",
+                            error=str(error),
+                            latency_ms=(time.perf_counter() - started) * 1000,
+                        )
+                        await update_record(
+                            RunItem, item.id, status="failed", error=str(error)
+                        )
+                        failed += 1
+                    finally:
+                        progress.update()
         record = await get_record(StageRun, run.id)
         await update_record(
             StageRun,

@@ -7,6 +7,7 @@ from src.config import ChunkConfig
 from src.etls.text_transforms import split_markdown
 from src.stor_rel import crud
 from src.stor_rel.schema import Chunk, PageRepresentation, RunItem
+from src.utils.progress import progress_bar
 
 
 async def build_chunks(
@@ -33,55 +34,65 @@ async def build_chunks(
     }
     completed = 0
     try:
-        for representation in representations:
-            previous = items.get(representation.corpus_id)
-            if previous and previous.status == "completed":
-                completed += 1
-                continue
-            item = await crud.upsert_record(
-                RunItem,
-                {
-                    "run_id": run.id,
-                    "corpus_id": representation.corpus_id,
-                },
-                {
-                    "dataset_id": source.dataset_id,
-                    "status": "running",
-                    "attempts": (previous.attempts if previous else 0) + 1,
-                    "error": None,
-                },
-            )
-            try:
-                if not representation.text or not representation.text.strip():
-                    raise ValueError("Cannot chunk an empty OCR representation")
-                for ordinal, (kind, text) in enumerate(
-                    split_markdown(
-                        representation.text, config.max_chars, config.overlap_chars
-                    )
-                ):
-                    await crud.upsert_record(
-                        Chunk,
-                        {
-                            "run_id": run.id,
-                            "representation_id": representation.id,
-                            "ordinal": ordinal,
-                        },
-                        {
-                            "dataset_id": source.dataset_id,
-                            "corpus_id": representation.corpus_id,
-                            "kind": kind,
-                            "text": text,
-                            "content_hash": hashlib.sha256(text.encode()).hexdigest(),
-                        },
-                    )
-                await crud.update_record(
-                    RunItem, item.id, status="completed", error=None
+        with progress_bar(
+            total=len(representations), desc="Building chunks", unit="page"
+        ) as progress:
+            for representation in representations:
+                previous = items.get(representation.corpus_id)
+                if previous and previous.status == "completed":
+                    completed += 1
+                    progress.update()
+                    continue
+                item = await crud.upsert_record(
+                    RunItem,
+                    {
+                        "run_id": run.id,
+                        "corpus_id": representation.corpus_id,
+                    },
+                    {
+                        "dataset_id": source.dataset_id,
+                        "status": "running",
+                        "attempts": (previous.attempts if previous else 0) + 1,
+                        "error": None,
+                    },
                 )
-                completed += 1
-            except Exception as error:
-                await crud.update_record(
-                    RunItem, item.id, status="failed", error=str(error)
-                )
+                try:
+                    if not representation.text or not representation.text.strip():
+                        raise ValueError("Cannot chunk an empty OCR representation")
+                    for ordinal, (kind, text) in enumerate(
+                        split_markdown(
+                            representation.text,
+                            config.max_chars,
+                            config.overlap_chars,
+                        )
+                    ):
+                        await crud.upsert_record(
+                            Chunk,
+                            {
+                                "run_id": run.id,
+                                "representation_id": representation.id,
+                                "ordinal": ordinal,
+                            },
+                            {
+                                "dataset_id": source.dataset_id,
+                                "corpus_id": representation.corpus_id,
+                                "kind": kind,
+                                "text": text,
+                                "content_hash": hashlib.sha256(
+                                    text.encode()
+                                ).hexdigest(),
+                            },
+                        )
+                    await crud.update_record(
+                        RunItem, item.id, status="completed", error=None
+                    )
+                    completed += 1
+                except Exception as error:
+                    await crud.update_record(
+                        RunItem, item.id, status="failed", error=str(error)
+                    )
+                finally:
+                    progress.update()
         await crud.finish_run(
             run.id,
             status="completed"

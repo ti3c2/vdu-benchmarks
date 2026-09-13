@@ -32,6 +32,7 @@ from src.stor_rel.schema import (
     RetrievalHit,
     RunItem,
 )
+from src.utils.progress import progress_bar
 
 logger = logging.getLogger(__name__)
 ContextRenderer = Callable[[PageRepresentation, ObjectStore], Awaitable[list[dict]]]
@@ -280,7 +281,19 @@ async def run_generation(
                 return False
 
     try:
-        outcomes = await asyncio.gather(*(process(row) for row in retrievals))
+
+        async def tracked_process(retrieval):
+            try:
+                return await process(retrieval)
+            finally:
+                progress.update()
+
+        with progress_bar(
+            total=len(retrievals), desc="Generating answers", unit="query"
+        ) as progress:
+            outcomes = await asyncio.gather(
+                *(tracked_process(row) for row in retrievals)
+            )
         completed = sum(outcomes)
         await finish_run(
             run.id,

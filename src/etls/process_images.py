@@ -17,6 +17,7 @@ from src.config import PreprocessConfig
 from src.stor_obj import ObjectStore
 from src.stor_rel import crud
 from src.stor_rel.schema import Asset, Corpus, Dataset, PageRepresentation, RunItem
+from src.utils.progress import progress_bar
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +229,18 @@ async def preprocess_pages(
                     logger.warning("OCR failed for corpus %s: %s", page.id, error)
                     return False
 
-        outcomes = await asyncio.gather(*(process_page(page) for page in pages))
+        async def tracked_process_page(page):
+            try:
+                return await process_page(page)
+            finally:
+                progress.update()
+
+        with progress_bar(
+            total=len(pages), desc="Preprocessing pages", unit="page"
+        ) as progress:
+            outcomes = await asyncio.gather(
+                *(tracked_process_page(page) for page in pages)
+            )
         completed = sum(outcomes)
         await crud.finish_run(
             run.id,

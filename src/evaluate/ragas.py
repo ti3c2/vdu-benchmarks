@@ -38,6 +38,7 @@ from src.stor_rel.schema import (
     Query,
     Retrieval,
 )
+from src.utils.progress import progress_bar
 
 logger = logging.getLogger(__name__)
 
@@ -294,6 +295,10 @@ async def evaluate_ragas(
         for r in await find_records(MetricResult, evaluation_run_id=run.id)
         if r.status == "completed"
     }
+    metric_ids = [metric_key(selected) for selected, _, _ in metrics]
+    prior_count = sum(
+        (query.id, metric_id) in prior for query in queries for metric_id in metric_ids
+    )
     metric_semaphore = asyncio.Semaphore(config.ragas_max_concurrency)
 
     async def score_query(query):
@@ -565,6 +570,7 @@ async def evaluate_ragas(
                 },
                 values,
             )
+            progress.update()
 
         await asyncio.gather(
             *(
@@ -574,7 +580,11 @@ async def evaluate_ragas(
         )
 
     try:
-        await asyncio.gather(*(score_query(query) for query in queries))
+        with progress_bar(
+            total=len(queries) * len(metrics), desc="Evaluating Ragas", unit="metric"
+        ) as progress:
+            progress.update(prior_count)
+            await asyncio.gather(*(score_query(query) for query in queries))
         await persist_aggregates(run.id, queries)
         results = await find_records(MetricResult, evaluation_run_id=run.id)
         failed = sum(r.status == "failed" for r in results)

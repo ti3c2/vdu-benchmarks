@@ -85,6 +85,8 @@ Default retrieval depth is 20 pages. The per-branch candidate budget is `min(poi
 
 ## Generation and evaluation
 
+Full RAG examples for cached OCR retrieval are `configs/ocr-cached-sparse-rag.yaml`, `configs/ocr-cached-dense-rag.yaml`, and `configs/ocr-cached-hybrid-rag.yaml`. They use OpenAI for answer generation and Ragas judging, alongside the existing IR metrics. See the [full RAG evaluation guide](docs/rag-evaluation.md) for setup, metric descriptions, and commands to reuse completed retrieval runs or add generation and evaluation to existing experiments.
+
 Generation selects five complete pages by default. `context.representations` accepts `ocr`, `image`/`original_image`, or registered custom representations. Non-image contexts require a pinned `representation_run_id`. Missing representations and exceeded context budgets fail the sample; the pipeline never silently replaces full pages with matching chunks or truncates pages.
 
 Register future whole-page rendering formats with `register_context_renderer`. Model/server changes, model training, and token/patch multivector retrieval are outside this repository.

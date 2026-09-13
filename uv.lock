@@ -4666,6 +4666,7 @@ dependencies = [
     { name = "sacrebleu" },
     { name = "sqlalchemy" },
     { name = "tenacity" },
+    { name = "tqdm" },
     { name = "typer" },
 ]
 
@@ -4707,6 +4708,7 @@ requires-dist = [
     { name = "sacrebleu", specifier = ">=2.0.0" },
     { name = "sqlalchemy", specifier = ">=2.0.52" },
     { name = "tenacity", specifier = ">=9.1.4" },
+    { name = "tqdm", specifier = ">=4.70.0" },
     { name = "typer", specifier = ">=0.16.0" },
 ]
 

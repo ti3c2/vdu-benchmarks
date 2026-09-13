@@ -27,6 +27,7 @@ from src.stor_rel.schema import (
     Retrieval,
     RetrievalHit,
 )
+from src.utils.progress import progress_bar
 
 
 def ir_metric_definitions(config: IRConfig):
@@ -152,6 +153,7 @@ async def evaluate_ir(
     )
     try:
         qrels = await get_effective_qrels(experiment.dataset_id, query_ids)
+        metrics = ir_metric_definitions(config)
         judged = {
             UUID(str(q["query_id"]))
             for q in qrels
@@ -178,45 +180,49 @@ async def evaluate_ir(
         }
         failed = 0
         scored = 0
-        for qid in query_ids:
-            for metric in ir_metric_definitions(config):
-                status, value, reason = (
-                    "completed",
-                    scores.get((qid, str(metric)), 0.0),
-                    None,
-                )
-                if by_query[qid].status != "completed":
-                    status, value, reason = "failed", None, "Retrieval failed"
-                    failed += 1
-                elif qid not in judged:
+        with progress_bar(
+            total=len(query_ids), desc="Evaluating IR", unit="query"
+        ) as progress:
+            for qid in query_ids:
+                for metric in metrics:
                     status, value, reason = (
-                        "skipped",
+                        "completed",
+                        scores.get((qid, str(metric)), 0.0),
                         None,
-                        "No relevant judgments for query",
                     )
-                else:
-                    scored += 1
-                await upsert_record(
-                    MetricResult,
-                    {
-                        "evaluation_run_id": run.id,
-                        "query_id": qid,
-                        "metric_id": str(metric),
-                    },
-                    {
-                        "dataset_id": run.dataset_id,
-                        "status": status,
-                        "value": value,
-                        "reason": reason,
-                        "error": reason if status == "failed" else None,
-                    },
-                )
+                    if by_query[qid].status != "completed":
+                        status, value, reason = "failed", None, "Retrieval failed"
+                        failed += 1
+                    elif qid not in judged:
+                        status, value, reason = (
+                            "skipped",
+                            None,
+                            "No relevant judgments for query",
+                        )
+                    else:
+                        scored += 1
+                    await upsert_record(
+                        MetricResult,
+                        {
+                            "evaluation_run_id": run.id,
+                            "query_id": qid,
+                            "metric_id": str(metric),
+                        },
+                        {
+                            "dataset_id": run.dataset_id,
+                            "status": status,
+                            "value": value,
+                            "reason": reason,
+                            "error": reason if status == "failed" else None,
+                        },
+                    )
+                progress.update()
         queries = [await get_record(Query, qid) for qid in query_ids]
         await persist_aggregates(run.id, queries)
         await finish_run(
             run.id,
             status="partial" if failed else "completed",
-            expected_count=len(query_ids) * len(ir_metric_definitions(config)),
+            expected_count=len(query_ids) * len(metrics),
             completed_count=scored,
             failed_count=failed,
         )

@@ -8,6 +8,13 @@ After changing Python code, always format with:
 ./scripts/format.sh
 ```
 
+When running Python commands directly, use `uv run` so the project environment is active, for example:
+
+```bash
+uv run python -m pytest
+uv run python -m compileall src
+```
+
 ## Implementation style
 
 Prefer a readable, inlined implementation over a thicket of helpers.
@@ -22,8 +29,10 @@ Prefer a readable, inlined implementation over a thicket of helpers.
 def _strip_chunk(chunk: str) -> str:
     return chunk.strip()
 
+
 def _should_keep(chunk: str) -> bool:
     return bool(chunk)
+
 
 for chunk in chunks:
     chunk = _strip_chunk(chunk)

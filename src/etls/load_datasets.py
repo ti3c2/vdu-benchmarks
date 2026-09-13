@@ -14,6 +14,7 @@ from PIL import Image
 
 from src.settings import get_settings
 from src.stor_obj import ObjectStore
+from src.utils.progress import progress_bar
 
 
 def image_payload(image: Any) -> tuple[bytes, str]:
@@ -256,29 +257,41 @@ async def ingest_dataset(
     store = object_store or ObjectStore()
     try:
         docs = {}
-        for row in normalized["docs"]:
-            record = await crud.upsert_record(
-                Doc, {"dataset_id": dataset.id, "original_id": row["original_id"]}, {}
-            )
-            docs[row["original_id"]] = record.id
+        with progress_bar(
+            total=len(normalized["docs"]), desc="Ingesting docs", unit="doc"
+        ) as progress:
+            for row in normalized["docs"]:
+                record = await crud.upsert_record(
+                    Doc,
+                    {"dataset_id": dataset.id, "original_id": row["original_id"]},
+                    {},
+                )
+                docs[row["original_id"]] = record.id
+                progress.update()
         queries = {}
-        for row in normalized["queries"]:
-            level = row["rephrase_level"]
-            record = await crud.upsert_record(
-                Query,
-                {
-                    "dataset_id": dataset.id,
-                    "original_id": row["original_id"],
-                    "rephrase_level": level,
-                },
-                {
-                    "query": row["query"],
-                    "language": row["language"],
-                    "rephrase_of_id": queries[row["original_id"]] if level else None,
-                },
-            )
-            if level == 0:
-                queries[row["original_id"]] = record.id
+        with progress_bar(
+            total=len(normalized["queries"]), desc="Ingesting queries", unit="query"
+        ) as progress:
+            for row in normalized["queries"]:
+                level = row["rephrase_level"]
+                record = await crud.upsert_record(
+                    Query,
+                    {
+                        "dataset_id": dataset.id,
+                        "original_id": row["original_id"],
+                        "rephrase_level": level,
+                    },
+                    {
+                        "query": row["query"],
+                        "language": row["language"],
+                        "rephrase_of_id": queries[row["original_id"]]
+                        if level
+                        else None,
+                    },
+                )
+                if level == 0:
+                    queries[row["original_id"]] = record.id
+                progress.update()
         corpus = {}
         existing_pages = {
             page.original_id: page
@@ -296,77 +309,86 @@ async def ingest_dataset(
                 RunItem, run_id=run.id, status="completed"
             )
         }
-        for row in normalized["corpus"]:
-            previous = existing_pages.get(row["original_id"])
-            if previous and previous.id in completed_pages:
-                corpus[row["original_id"]] = previous.id
-                continue
-            image = data["corpus"][row["source_ordinal"]]["image"]
-            image_bytes, mime_type = await asyncio.to_thread(image_payload, image)
-            stored = await store.put_bytes(image_bytes, mime_type)
-            asset = await crud.upsert_record(
-                Asset,
-                {
-                    "dataset_id": dataset.id,
-                    "bucket": stored.bucket,
-                    "object_key": stored.object_key,
-                },
-                {
-                    key: value
-                    for key, value in asdict(stored).items()
-                    if key not in {"bucket", "object_key"}
-                },
-            )
-            page = await crud.upsert_record(
-                Corpus,
-                {"dataset_id": dataset.id, "original_id": row["original_id"]},
-                {
-                    "doc_id": docs[row["doc_original_id"]],
-                    "image_filename": row["image_filename"],
-                    "asset_id": asset.id,
-                },
-            )
-            corpus[row["original_id"]] = page.id
-            original = original_representations.get(page.id)
-            if original is not None:
-                if original.asset_id != asset.id:
-                    raise ValueError(
-                        "Original image changed inside an immutable dataset"
-                    )
-            else:
-                await crud.upsert_record(
-                    PageRepresentation,
-                    {
-                        "run_id": run.id,
-                        "corpus_id": page.id,
-                        "kind": "original_image",
-                    },
+        with progress_bar(
+            total=len(normalized["corpus"]), desc="Ingesting pages", unit="page"
+        ) as progress:
+            for row in normalized["corpus"]:
+                previous = existing_pages.get(row["original_id"])
+                if previous and previous.id in completed_pages:
+                    corpus[row["original_id"]] = previous.id
+                    progress.update()
+                    continue
+                image = data["corpus"][row["source_ordinal"]]["image"]
+                image_bytes, mime_type = await asyncio.to_thread(image_payload, image)
+                stored = await store.put_bytes(image_bytes, mime_type)
+                asset = await crud.upsert_record(
+                    Asset,
                     {
                         "dataset_id": dataset.id,
-                        "asset_id": asset.id,
-                        "metadata_json": {"source_metadata": row["metadata"]},
+                        "bucket": stored.bucket,
+                        "object_key": stored.object_key,
+                    },
+                    {
+                        key: value
+                        for key, value in asdict(stored).items()
+                        if key not in {"bucket", "object_key"}
                     },
                 )
-            await crud.upsert_record(
-                RunItem,
-                {"run_id": run.id, "corpus_id": page.id},
-                {
-                    "dataset_id": dataset.id,
-                    "status": "completed",
-                    "attempts": 1,
-                    "error": None,
-                },
-            )
-        for row in normalized["qrels"]:
-            await crud.upsert_record(
-                Qrel,
-                {
-                    "dataset_id": dataset.id,
-                    "query_id": queries[row["query_original_id"]],
-                    "corpus_id": corpus[row["corpus_original_id"]],
-                },
-                {"answer": row["answer"], "score": row["score"]},
-            )
+                page = await crud.upsert_record(
+                    Corpus,
+                    {"dataset_id": dataset.id, "original_id": row["original_id"]},
+                    {
+                        "doc_id": docs[row["doc_original_id"]],
+                        "image_filename": row["image_filename"],
+                        "asset_id": asset.id,
+                    },
+                )
+                corpus[row["original_id"]] = page.id
+                original = original_representations.get(page.id)
+                if original is not None:
+                    if original.asset_id != asset.id:
+                        raise ValueError(
+                            "Original image changed inside an immutable dataset"
+                        )
+                else:
+                    await crud.upsert_record(
+                        PageRepresentation,
+                        {
+                            "run_id": run.id,
+                            "corpus_id": page.id,
+                            "kind": "original_image",
+                        },
+                        {
+                            "dataset_id": dataset.id,
+                            "asset_id": asset.id,
+                            "metadata_json": {"source_metadata": row["metadata"]},
+                        },
+                    )
+                await crud.upsert_record(
+                    RunItem,
+                    {"run_id": run.id, "corpus_id": page.id},
+                    {
+                        "dataset_id": dataset.id,
+                        "status": "completed",
+                        "attempts": 1,
+                        "error": None,
+                    },
+                )
+                progress.update()
+        with progress_bar(
+            total=len(normalized["qrels"]), desc="Ingesting qrels", unit="qrel"
+        ) as progress:
+            for row in normalized["qrels"]:
+                await crud.upsert_record(
+                    Qrel,
+                    {
+                        "dataset_id": dataset.id,
+                        "query_id": queries[row["query_original_id"]],
+                        "corpus_id": corpus[row["corpus_original_id"]],
+                    },
+                    {"answer": row["answer"], "score": row["score"]},
+                )
+                progress.update()
         counts = {name: len(rows) for name, rows in normalized.items()}
         await crud.finish_run(
             run.id,
