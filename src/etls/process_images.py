@@ -2,9 +2,11 @@
 
 import asyncio
 import base64
+import csv
 import logging
 import time
 from functools import partial
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 from uuid import UUID
 
@@ -112,71 +114,120 @@ async def preprocess_pages(
     )
     if run.status == "completed":
         return run.id
-    store = object_store or ObjectStore()
+    cached_texts = None
     client = None
-    if ocr_processor is None:
-        profile = config.endpoint
-        client = AsyncOpenAI(
-            base_url=profile.base_url,
-            api_key=profile.resolve_api_key(),
-            timeout=profile.timeout_seconds,
-            max_retries=0,
-        )
-        ocr_processor = partial(process_image, client=client)
-    items = {
-        item.corpus_id: item for item in await crud.find_records(RunItem, run_id=run.id)
-    }
-    semaphore = asyncio.Semaphore(config.endpoint.concurrency)
-
-    async def process_page(page):
-        previous = items.get(page.id)
-        if previous and previous.status == "completed":
-            return True
-        async with semaphore:
-            item = await crud.upsert_record(
-                RunItem,
-                {"run_id": run.id, "corpus_id": page.id},
-                {
-                    "dataset_id": dataset_id,
-                    "status": "running",
-                    "attempts": (previous.attempts if previous else 0) + 1,
-                    "error": None,
-                },
+    try:
+        if config.ocr_text_path:
+            path = Path(config.ocr_text_path).expanduser()
+            cached_texts = {}
+            with path.open(encoding="utf-8-sig", newline="") as stream:
+                reader = csv.DictReader(stream)
+                if not reader.fieldnames or not {
+                    "corpus-id",
+                    "text",
+                }.issubset(reader.fieldnames):
+                    raise ValueError(
+                        "Cached OCR CSV must have corpus-id and text columns"
+                    )
+                for row in reader:
+                    original_id = (row.get("corpus-id") or "").strip()
+                    text = row.get("text")
+                    if not original_id:
+                        raise ValueError("Cached OCR CSV has a row without corpus-id")
+                    if original_id in cached_texts:
+                        raise ValueError(
+                            f"Cached OCR CSV has duplicate corpus-id {original_id!r}"
+                        )
+                    if not isinstance(text, str) or not text.strip():
+                        raise ValueError(
+                            f"Cached OCR CSV has empty text for corpus-id {original_id!r}"
+                        )
+                    cached_texts[original_id] = text
+        store = object_store or ObjectStore() if cached_texts is None else object_store
+        if ocr_processor is None and cached_texts is None:
+            profile = config.endpoint
+            client = AsyncOpenAI(
+                base_url=profile.base_url,
+                api_key=profile.resolve_api_key(),
+                timeout=profile.timeout_seconds,
+                max_retries=0,
             )
-            try:
-                asset = await crud.get_record(Asset, page.asset_id)
-                if asset is None:
-                    raise ValueError(f"Page {page.id} has no original image asset")
-                image_bytes = await store.read_asset(asset)
-                result = await ocr_processor(image_bytes, asset.mime_type, config)
-                text = result["text"]
-                if not isinstance(text, str) or not text.strip():
-                    raise ValueError("OCR endpoint returned no page text")
-                await crud.upsert_record(
-                    PageRepresentation,
+            ocr_processor = partial(process_image, client=client)
+        items = {
+            item.corpus_id: item
+            for item in await crud.find_records(RunItem, run_id=run.id)
+        }
+        concurrency = config.endpoint.concurrency if config.endpoint else 8
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def process_page(page):
+            previous = items.get(page.id)
+            if previous and previous.status == "completed":
+                return True
+            async with semaphore:
+                item = await crud.upsert_record(
+                    RunItem,
                     {
                         "run_id": run.id,
                         "corpus_id": page.id,
-                        "kind": "ocr",
                     },
                     {
                         "dataset_id": dataset_id,
-                        "text": text,
-                        "metadata_json": result.get("metadata", {}),
+                        "status": "running",
+                        "attempts": (previous.attempts if previous else 0) + 1,
+                        "error": None,
                     },
                 )
-                await crud.update_record(
-                    RunItem, item.id, status="completed", error=None
-                )
-                return True
-            except Exception as error:
-                await crud.update_record(
-                    RunItem, item.id, status="failed", error=str(error)
-                )
-                logger.warning("OCR failed for corpus %s: %s", page.id, error)
-                return False
+                try:
+                    if cached_texts is not None:
+                        if page.original_id not in cached_texts:
+                            raise ValueError(
+                                f"Cached OCR CSV has no text for corpus-id {page.original_id!r}"
+                            )
+                        text = cached_texts[page.original_id]
+                        metadata = {
+                            "source": "cached_ocr_csv",
+                            "path": str(path),
+                            "corpus_original_id": page.original_id,
+                        }
+                    else:
+                        asset = await crud.get_record(Asset, page.asset_id)
+                        if asset is None:
+                            raise ValueError(
+                                f"Page {page.id} has no original image asset"
+                            )
+                        image_bytes = await store.read_asset(asset)
+                        result = await ocr_processor(
+                            image_bytes, asset.mime_type, config
+                        )
+                        text = result["text"]
+                        metadata = result.get("metadata", {})
+                    if not isinstance(text, str) or not text.strip():
+                        raise ValueError("OCR endpoint returned no page text")
+                    await crud.upsert_record(
+                        PageRepresentation,
+                        {
+                            "run_id": run.id,
+                            "corpus_id": page.id,
+                            "kind": "ocr",
+                        },
+                        {
+                            "dataset_id": dataset_id,
+                            "text": text,
+                            "metadata_json": metadata,
+                        },
+                    )
+                    await crud.update_record(
+                        RunItem, item.id, status="completed", error=None
+                    )
+                    return True
+                except Exception as error:
+                    await crud.update_record(
+                        RunItem, item.id, status="failed", error=str(error)
+                    )
+                    logger.warning("OCR failed for corpus %s: %s", page.id, error)
+                    return False
 
-    try:
         outcomes = await asyncio.gather(*(process_page(page) for page in pages))
         completed = sum(outcomes)
         await crud.finish_run(
@@ -190,8 +241,15 @@ async def preprocess_pages(
             completed_count=completed,
             failed_count=len(pages) - completed,
         )
-    except BaseException:
-        await crud.finish_run(run.id, status="failed")
+    except BaseException as error:
+        await crud.finish_run(
+            run.id,
+            status="failed",
+            expected_count=len(pages),
+            completed_count=0,
+            failed_count=len(pages),
+            error=str(error),
+        )
         raise
     finally:
         if client is not None:

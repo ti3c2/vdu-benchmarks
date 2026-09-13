@@ -36,9 +36,16 @@ class EndpointProfile(Config):
 
 
 class PreprocessConfig(Config):
-    endpoint: EndpointProfile
+    endpoint: EndpointProfile | None = None
+    ocr_text_path: Path | None = None
     prompt: str = "Convert the document to markdown."
     page_limit: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def check_source(self):
+        if self.endpoint is None and self.ocr_text_path is None:
+            raise ValueError("Preprocessing requires endpoint or ocr_text_path")
+        return self
 
 
 class ChunkConfig(Config):

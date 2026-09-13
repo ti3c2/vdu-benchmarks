@@ -348,6 +348,48 @@ async def test_preprocessing_resume_and_chunks_reuse_cached_ocr(
         )
 
 
+async def test_preprocessing_loads_cached_ocr_csv_without_endpoint(
+    source_data, memory_database, object_store, tmp_path
+):
+    dataset_id = await ingest_dataset(
+        "fixture/cached-ocr-file",
+        revision="v1",
+        data=source_data,
+        object_store=object_store,
+    )
+    path = tmp_path / "ocr.csv"
+    rows = [
+        {"corpus-id": page["corpus-id"], "text": f"cached text {index}"}
+        for index, page in enumerate(source_data["corpus"])
+    ]
+    with path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=["corpus-id", "text"])
+        writer.writeheader()
+        writer.writerows(rows)
+
+    class OfflineStore:
+        async def read_asset(self, asset):
+            raise AssertionError("Cached OCR preprocessing must not read images")
+
+    async def unexpected_ocr(*args, **kwargs):
+        raise AssertionError("Cached OCR preprocessing must not call OCR")
+
+    run_id = await preprocess_pages(
+        dataset_id,
+        PreprocessConfig(ocr_text_path=path),
+        object_store=OfflineStore(),
+        ocr_processor=unexpected_ocr,
+    )
+    assert (await crud.get_record(StageRun, run_id)).status == "completed"
+    pages = {corpus.id: corpus.original_id for corpus in memory_database[Corpus]}
+    reps = await crud.find_records(PageRepresentation, run_id=run_id)
+    assert {pages[rep.corpus_id]: rep.text for rep in reps} == {
+        row["corpus-id"]: row["text"] for row in rows
+    }
+    assert all(rep.metadata_json["source"] == "cached_ocr_csv" for rep in reps)
+    assert await build_chunks(run_id, ChunkConfig(max_chars=1000))
+
+
 async def test_ocr_request_uses_actual_mime_and_seconds():
     requests = []
 

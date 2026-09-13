@@ -26,14 +26,14 @@ Endpoint configuration contains `api_key_env`, the **name** of an environment va
 uv run vdu dataset ingest --source ibm-research/REAL-MM-RAG_FinReport_BEIR --revision main
 ```
 
-The command returns a dataset UUID. Put that UUID in `configs/ocr-dense.yaml`, configure your model endpoints, and run:
+The command returns a dataset UUID. Put that UUID in `configs/ocr-cached-dense.yaml`, configure your embedding endpoint, and run:
 
 ```bash
-uv run vdu experiment run --config configs/ocr-dense.yaml
+uv run vdu experiment run --config configs/ocr-cached-dense.yaml
 uv run vdu run show --run-id RUN_UUID
 ```
 
-Configuration examples contain placeholder endpoint/model settings and the all-zero dataset UUID. Replace these before running. `main` is resolved to a source revision during ingestion. Reingesting the same immutable source snapshot reuses its UUID.
+Configuration examples contain placeholder endpoint/model settings and the all-zero dataset UUID. Replace these before running. The `ocr-cached-*` examples load page text from `data/processed/20260907-212356_ibm-research-REAL-MM-RAG_FinReport_BEIR_deepseek-ai/i2t/DeepSeek-OCR-2_deepseek-ocr_i2t.csv`. The `ocr-*` examples keep the live OCR endpoint configuration for later model-backed OCR runs. See `docs/configuration.md` for a field-by-field config reference, including the meaning of `space_id`. `main` is resolved to a source revision during ingestion. Reingesting the same immutable source snapshot reuses its UUID.
 
 FinReport has 19 documents, 2,687 pages, 853 original queries, and 853 qrels. Normalization produces 3,412 query rows when all three rephrases are present. Query variants inherit their base query's qrels and answer; source qrels are stored once.
 
@@ -62,6 +62,10 @@ Each stage accepts input IDs and returns its run ID as JSON. Logs go to stderr, 
 An experiment pins its query cohort and all stage dependencies. `reuse` can explicitly select `representations`, `chunks`, `query_embeddings`, `corpus_embeddings`, `retrieval`, and `generation` run IDs. Completed stages are also reused automatically when their input IDs, query/page selection, configuration, and implementation fingerprint match. Changed configurations create new artifacts.
 
 Incomplete stages return nonzero CLI status. Resume retries missing or failed items while retaining successful outputs. An interrupted external request whose result was never persisted can run again. PostgreSQL, MinIO, and Qdrant are reconciled through stable identities; they do not share a distributed transaction.
+
+To compare OCR text retrieval on original queries only with the cached OCR file, use the step-by-step guide in `docs/ocr-text-retriever-comparison.md`.
+
+Those configs use `queries.rephrase_levels: [0]`, so rephrased queries are excluded. BM25 needs no embedding model endpoint. Dense and hybrid need the configured text embedding endpoint. To run the same comparison with live OCR later, use `configs/ocr-sparse.yaml`, `configs/ocr-dense.yaml`, and `configs/ocr-hybrid.yaml`; those additionally require the OCR endpoint.
 
 ## Retrieval configurations
 
