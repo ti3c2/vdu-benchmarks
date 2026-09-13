@@ -1,0 +1,26 @@
+name: ocr-hybrid
+dataset_id: 00000000-0000-0000-0000-000000000000
+preprocess:
+  endpoint:
+    model: deepseek-ai/DeepSeek-OCR-2
+    base_url: http://localhost:8000/v1
+    api_key_env: OCR_API_KEY
+embeddings:
+  dense:
+    endpoint:
+      model: BAAI/bge-m3
+      base_url: http://localhost:8001/v1
+      api_key_env: EMBEDDING_API_KEY
+    space_id: bge-m3-dense-v1
+    dimensions: 1024
+  sparse:
+    model: Qdrant/bm25
+corpus_unit: chunk
+retrieval:
+  mode: hybrid
+  page_top_k: 20
+ir:
+  cutoffs: [1, 5, 10, 20]
+ragas:
+  ragas_max_concurrency: 4
+  metrics: []

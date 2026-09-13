@@ -1,0 +1,40 @@
+name: ocr-dense
+dataset_id: 00000000-0000-0000-0000-000000000000
+queries:
+  rephrase_levels: [0, 1, 2, 3]
+preprocess:
+  endpoint:
+    model: deepseek-ai/DeepSeek-OCR-2
+    base_url: http://localhost:8000/v1
+    api_key_env: OCR_API_KEY
+  prompt: Convert the document to markdown.
+chunking:
+  max_chars: 4000
+  overlap_chars: 0
+embeddings:
+  dense:
+    endpoint:
+      model: BAAI/bge-m3
+      base_url: http://localhost:8001/v1
+      api_key_env: EMBEDDING_API_KEY
+    space_id: bge-m3-dense-v1
+    modality: text
+    dimensions: 1024
+  batch_size: 64
+corpus_unit: chunk
+retrieval:
+  mode: dense
+  page_top_k: 20
+generation:
+  endpoint:
+    model: your-generation-model
+    base_url: http://localhost:8002/v1
+    api_key_env: GENERATION_API_KEY
+  context:
+    representations: [ocr]
+    page_top_k: 5
+ir:
+  cutoffs: [1, 5, 10, 20]
+ragas:
+  ragas_max_concurrency: 4
+  metrics: []

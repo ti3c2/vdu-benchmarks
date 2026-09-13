@@ -1,0 +1,35 @@
+name: image-dense-page-bm25
+dataset_id: 00000000-0000-0000-0000-000000000000
+preprocess:
+  endpoint:
+    model: deepseek-ai/DeepSeek-OCR-2
+    base_url: http://localhost:8000/v1
+    api_key_env: OCR_API_KEY
+embeddings:
+  dense:
+    endpoint:
+      model: your-multimodal-embedding-model
+      base_url: http://localhost:8001/v1
+      api_key_env: EMBEDDING_API_KEY
+    space_id: your-shared-text-image-space
+    modality: image
+    adapter: vllm
+  sparse:
+    model: Qdrant/bm25
+corpus_unit: page
+retrieval:
+  mode: hybrid
+  page_top_k: 20
+generation:
+  endpoint:
+    model: your-vision-generation-model
+    base_url: http://localhost:8002/v1
+    api_key_env: GENERATION_API_KEY
+  context:
+    representations: [image]
+    page_top_k: 5
+ir:
+  cutoffs: [1, 5, 10, 20]
+ragas:
+  ragas_max_concurrency: 4
+  metrics: []

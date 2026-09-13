@@ -1,56 +1,59 @@
-import typing as tp
-
-import regex as re
-
-TABLE_RE = re.compile(
-    r"(?P<title_row>(?:\|\s*[^|\r\n]+\s*)+\|)"
-    r"(?:\r?\n)"
-    r"((?:\|[\s:]?-+[\s:]?)+\|)"
-    r"(?P<rows>(?:(?:\r?\n)(?:\|\s*[^|\r\n]+\s*)+\|)+)"
-)
+"""Conservative OCR segmentation: preserve prose and tables in source order."""
 
 
-def split_tables(text: str) -> tuple[str, list[str]]:
-    """Return prose with tables removed, plus the extracted table strings."""
-    tables = [m.group(0) for m in TABLE_RE.finditer(text)]
-    text_without_tables = TABLE_RE.sub("", text)
-    text_without_tables = re.sub(r"\n{3,}", "\n\n", text_without_tables)
-    return text_without_tables, tables
+def split_markdown(text: str, max_chars: int = 4000, overlap_chars: int = 0):
+    """Yield ``(kind, text)`` chunks without deleting OCR content.
 
+    Pipe tables and HTML tables retain their position amongst prose. Large blocks
+    prefer line/word boundaries, and fall back to character boundaries for long
+    unbroken tokens. Overlap applies only within a block, never between tables
+    and prose. The unmodified source remains in the page representation.
+    """
+    if max_chars <= 0 or not 0 <= overlap_chars < max_chars:
+        raise ValueError("Require max_chars > 0 and 0 <= overlap_chars < max_chars")
 
-def remove_hrule(text: str) -> str:
-    return re.sub(r"^\n[-]{2,}$\n", "", text, flags=re.MULTILINE)
+    blocks = []
+    lines = []
+    kind = "prose"
+    in_html_table = False
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        starts_html = "<table" in stripped.lower()
+        is_pipe = stripped.startswith("|") and stripped.count("|") >= 2
+        next_kind = "table" if in_html_table or starts_html or is_pipe else "prose"
+        if lines and (next_kind != kind or (not stripped and kind == "prose")):
+            block = "".join(lines).strip()
+            if block:
+                blocks.append((kind, block))
+            lines = []
+        if stripped or lines:
+            lines.append(line)
+        kind = next_kind
+        if starts_html:
+            in_html_table = True
+        if "</table>" in stripped.lower():
+            in_html_table = False
+    if lines:
+        block = "".join(lines).strip()
+        if block:
+            blocks.append((kind, block))
 
-
-def remove_emphasis(text: str) -> str:
-    return re.sub(r"[_\*\~]", r"", text, flags=re.MULTILINE)
-
-
-def remove_first_char_on_line_space(text: str) -> str:
-    return re.sub(r"^ ", "", text, flags=re.MULTILINE)
-
-
-def remove_nonstring_starting_lines(text: str) -> str:
-    return re.sub(r"^[^\w\d#\n].+$", "", text, flags=re.MULTILINE)
-
-
-def remove_nl_sequences(text: str) -> str:
-    return re.sub(r"\n{2,}", "\n\n", text, flags=re.MULTILINE)
-
-
-def sequential_transforms(*funcs: tp.Callable[[str], str]) -> str:
-    def wrapper(text: str) -> str:
-        for func in funcs:
-            text = func(text)
-        return text
-
-    return wrapper
-
-
-text_cleanup_transforms = sequential_transforms(
-    remove_hrule,
-    remove_emphasis,
-    remove_first_char_on_line_space,
-    remove_nonstring_starting_lines,
-    remove_nl_sequences,
-)
+    for kind, block in blocks:
+        offset = 0
+        while offset < len(block):
+            end = min(offset + max_chars, len(block))
+            if end < len(block):
+                # Avoid tiny pieces when the only available boundary is near
+                # the start, including in a single oversized table row.
+                lower_bound = offset + max(max_chars // 2, overlap_chars + 1)
+                boundary = block.rfind("\n", lower_bound, end)
+                if boundary == -1:
+                    boundary = block.rfind(" ", lower_bound, end)
+                if boundary != -1:
+                    end = boundary + 1
+            chunk = block[offset:end].strip()
+            if chunk:
+                yield kind, chunk
+            if end == len(block):
+                break
+            offset = end - overlap_chars

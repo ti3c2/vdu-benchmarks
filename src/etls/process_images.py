@@ -1,91 +1,199 @@
-from datetime import datetime as dt
+"""Persist page OCR independently so expensive preprocessing can be reused."""
 
-import pandas as pd
-from loguru import logger
-from PIL import Image
-from pydantic import BaseModel
+import asyncio
+import base64
+import logging
+import time
+from functools import partial
+from typing import Any, Awaitable, Callable
+from uuid import UUID
 
-from ..settings import get_settings
-from ..utils.concurrency_utils import execute_with_semaphore
-from ..utils.image_utils import image2base64
-from ..utils.openai_utils import create_chat_completion, get_openai_client
-from .load_datasets import dataset_loaders
+from openai import AsyncOpenAI
+from tenacity import before_sleep_log, retry, stop_after_attempt, wait_fixed
 
-settings = get_settings()
+from src.config import PreprocessConfig
+from src.stor_obj import ObjectStore
+from src.stor_rel import crud
+from src.stor_rel.schema import Asset, Corpus, Dataset, PageRepresentation, RunItem
 
-prompts = {
-    "deepseek-ocr": "Convert the document to markdown.",
-}
+logger = logging.getLogger(__name__)
 
 
 async def process_image(
-    image: Image,
-    model: str = settings.openai_vlm_preprocess_model,
-    prompt_id: str = "deepseek-ocr",
-    prompt: str | None = None,
-    timeout: float = settings.openai_timeout,
-) -> str:
-    client = get_openai_client(
-        settings.openai_vlm_preprocess_api_key, settings.openai_vlm_preprocess_api_base
+    image_bytes: bytes,
+    mime_type: str,
+    config: PreprocessConfig,
+    *,
+    client: AsyncOpenAI | None = None,
+) -> dict[str, Any]:
+    """Run one OCR request, with explicit MIME and independent retry delay."""
+    profile = config.endpoint
+    owns_client = client is None
+    client = client or AsyncOpenAI(
+        base_url=profile.base_url,
+        api_key=profile.resolve_api_key(),
+        timeout=profile.timeout_seconds,
+        max_retries=0,
     )
-    if prompt is None:
-        prompt = prompts[prompt_id]
-    image_base64 = image2base64(image)
-    messages = [
-        {
-            "role": "user",
-            "content": [
+
+    @retry(
+        stop=stop_after_attempt(profile.max_retries),
+        wait=wait_fixed(profile.retry_wait_seconds),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+    )
+    async def request():
+        return await client.chat.completions.create(
+            model=profile.model,
+            messages=[
                 {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"},
-                },
-                {"type": "text", "text": prompt},
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+                            },
+                        },
+                        {"type": "text", "text": config.prompt},
+                    ],
+                }
             ],
+            extra_body=profile.extra_body,
+            timeout=profile.timeout_seconds,
+        )
+
+    started = time.perf_counter()
+    try:
+        response = await request()
+        text = response.choices[0].message.content
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("OCR endpoint returned no page text")
+        return {
+            "text": text,
+            "metadata": {
+                "response_id": response.id,
+                "model": response.model,
+                "finish_reason": response.choices[0].finish_reason,
+                "usage": response.usage.model_dump(mode="json")
+                if response.usage
+                else None,
+                "latency_seconds": time.perf_counter() - started,
+            },
         }
-    ]
-    res = await create_chat_completion(
-        client,
-        model=model,
-        messages=messages,
-        timeout=timeout,
-    )
-    return res.choices[0].message.content
+    finally:
+        if owns_client:
+            await client.close()
 
 
-async def process_images(
-    dataset: str,
-    model: str = settings.openai_vlm_preprocess_model,
-    prompt_id: str = "deepseek-ocr",
-    prompt: str | None = None,
-    max_concurrency: int = settings.openai_chat_completion_max_concurrency,
-    show_progress: bool = True,
-    save_results: bool = True,
-    limit: int | None = None,
-) -> tuple[pd.DataFrame, str]:
-    datasets = dataset_loaders[dataset]()
-    dataset_hf_name, data = next(iter(datasets.items()))
-    logger.info(f"Loaded {dataset_hf_name} dataset")
-    images = data["corpus"]["image"]
-    ids = data["corpus"]["corpus-id"]
-    if limit is not None:
-        images = images[:limit]
-        ids = ids[:limit]
-    results = await execute_with_semaphore(
-        [process_image(image, model, prompt_id, prompt) for image in images],
-        max_concurrency=max_concurrency,
-        show_progress=show_progress,
+async def preprocess_pages(
+    dataset_id: UUID,
+    config: PreprocessConfig,
+    resume_run_id: UUID | None = None,
+    *,
+    object_store: ObjectStore | None = None,
+    ocr_processor: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+) -> UUID:
+    dataset = await crud.get_record(Dataset, dataset_id)
+    if dataset is None or dataset.status != "completed":
+        raise ValueError("OCR requires a completed dataset ingestion")
+    pages = sorted(
+        await crud.find_records(Corpus, dataset_id=dataset_id),
+        key=lambda page: page.original_id,
     )
-    logger.info(f"Processed {len(images)} images")
-    timestamp = dt.now().strftime("%Y%m%d-%H%M%S")
-    dataset_short_name = dataset.split("/")[1]
-    fstem = f"{timestamp}_{dataset_short_name}_{model}_{prompt_id}"
-    fname = f"{fstem}_i2t.csv"
-    save_path = settings.path_data_processed / fstem / "i2t" / fname
-    df = pd.DataFrame({"corpus-id": ids, "text": results})
-    if save_results:
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(save_path, index=False)
-        logger.info(f"Saved results to {save_path}")
-        return df, save_path
-    else:
-        return df, None
+    if config.page_limit is not None:
+        pages = pages[: config.page_limit]
+    run = await crud.start_run(
+        dataset_id,
+        "preprocess",
+        config.model_dump(mode="json"),
+        selection=[str(page.id) for page in pages],
+        resume_run_id=resume_run_id,
+    )
+    if run.status == "completed":
+        return run.id
+    store = object_store or ObjectStore()
+    client = None
+    if ocr_processor is None:
+        profile = config.endpoint
+        client = AsyncOpenAI(
+            base_url=profile.base_url,
+            api_key=profile.resolve_api_key(),
+            timeout=profile.timeout_seconds,
+            max_retries=0,
+        )
+        ocr_processor = partial(process_image, client=client)
+    items = {
+        item.corpus_id: item for item in await crud.find_records(RunItem, run_id=run.id)
+    }
+    semaphore = asyncio.Semaphore(config.endpoint.concurrency)
+
+    async def process_page(page):
+        previous = items.get(page.id)
+        if previous and previous.status == "completed":
+            return True
+        async with semaphore:
+            item = await crud.upsert_record(
+                RunItem,
+                {"run_id": run.id, "corpus_id": page.id},
+                {
+                    "dataset_id": dataset_id,
+                    "status": "running",
+                    "attempts": (previous.attempts if previous else 0) + 1,
+                    "error": None,
+                },
+            )
+            try:
+                asset = await crud.get_record(Asset, page.asset_id)
+                if asset is None:
+                    raise ValueError(f"Page {page.id} has no original image asset")
+                image_bytes = await store.read_asset(asset)
+                result = await ocr_processor(image_bytes, asset.mime_type, config)
+                text = result["text"]
+                if not isinstance(text, str) or not text.strip():
+                    raise ValueError("OCR endpoint returned no page text")
+                await crud.upsert_record(
+                    PageRepresentation,
+                    {
+                        "run_id": run.id,
+                        "corpus_id": page.id,
+                        "kind": "ocr",
+                    },
+                    {
+                        "dataset_id": dataset_id,
+                        "text": text,
+                        "metadata_json": result.get("metadata", {}),
+                    },
+                )
+                await crud.update_record(
+                    RunItem, item.id, status="completed", error=None
+                )
+                return True
+            except Exception as error:
+                await crud.update_record(
+                    RunItem, item.id, status="failed", error=str(error)
+                )
+                logger.warning("OCR failed for corpus %s: %s", page.id, error)
+                return False
+
+    try:
+        outcomes = await asyncio.gather(*(process_page(page) for page in pages))
+        completed = sum(outcomes)
+        await crud.finish_run(
+            run.id,
+            status="completed"
+            if completed == len(pages)
+            else "partial"
+            if completed
+            else "failed",
+            expected_count=len(pages),
+            completed_count=completed,
+            failed_count=len(pages) - completed,
+        )
+    except BaseException:
+        await crud.finish_run(run.id, status="failed")
+        raise
+    finally:
+        if client is not None:
+            await client.close()
+    return run.id

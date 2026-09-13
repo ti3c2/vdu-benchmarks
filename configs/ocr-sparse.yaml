@@ -1,0 +1,25 @@
+name: ocr-bm25
+dataset_id: 00000000-0000-0000-0000-000000000000
+preprocess:
+  endpoint:
+    model: deepseek-ai/DeepSeek-OCR-2
+    base_url: http://localhost:8000/v1
+    api_key_env: OCR_API_KEY
+chunking:
+  max_chars: 4000
+embeddings:
+  sparse:
+    model: Qdrant/bm25
+    language: english
+    k: 1.2
+    b: 0.75
+    avg_len: 256
+corpus_unit: chunk
+retrieval:
+  mode: sparse
+  page_top_k: 20
+ir:
+  cutoffs: [1, 5, 10, 20]
+ragas:
+  ragas_max_concurrency: 4
+  metrics: []

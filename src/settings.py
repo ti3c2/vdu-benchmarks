@@ -14,20 +14,17 @@ class Settings(BaseSettings):
     path_data_processed: Path = path_data / "processed"
     path_data_interim: Path = path_data / "interim"
 
-    openai_vlm_preprocess_api_key: str = ""
-    openai_vlm_preprocess_api_base: str = "https://api.openai.com/v1"
-    openai_vlm_preprocess_model: str = "deepseek-ai/DeepSeek-OCR-2"
-
-    openai_emb_api_key: str = ""
-    openai_emb_api_base: str = "https://api.openai.com/v1"
-    openai_emb_model: str = "text-embedding-3-small"
-    openai_emb_batch_size: int = 256
-    openai_emb_num_workers: int = 3
-
-    openai_max_retries: int = 3
-    openai_timeout: int = 600 * 1000
-    log_chat_completion_input: bool = False
-    openai_chat_completion_max_concurrency: int = 64
+    sql_database_url: str = "postgresql+asyncpg://vdu:vdu@localhost:5432/vdu"
+    sql_pool_size: int = 10
+    sql_max_overflow: int = 20
+    sql_pool_timeout: int = 30
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: str | None = None
+    minio_endpoint: str = "localhost:9000"
+    minio_access_key: str = "vdu-admin"
+    minio_secret_key: str = "vdu-local-secret"
+    minio_secure: bool = False
+    minio_bucket: str = "vdu-benchmarks"
 
     log_level: int = logging.INFO
 
