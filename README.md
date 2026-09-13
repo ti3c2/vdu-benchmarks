@@ -55,13 +55,14 @@ Each stage accepts input IDs and returns its run ID as JSON. Logs go to stderr, 
 | `vdu evaluate ir` | Experiment and retrieval-run IDs; IR configuration |
 | `vdu evaluate ragas` | Experiment, retrieval, optional generation IDs; metric configuration |
 | `vdu run resume` | Existing run ID |
+| `vdu experiment discard` | Experiment ID; optional completed-run cleanup |
 | `vdu experiment compare` | Experiment IDs |
 | `vdu suite run` | YAML list of complete experiment configurations |
 | `vdu metrics list` | No model or database connection required |
 
 An experiment pins its query cohort and all stage dependencies. `reuse` can explicitly select `representations`, `chunks`, `query_embeddings`, `corpus_embeddings`, `retrieval`, and `generation` run IDs. Completed stages are also reused automatically when their input IDs, query/page selection, configuration, and implementation fingerprint match. Changed configurations create new artifacts.
 
-Incomplete stages return nonzero CLI status. Resume retries missing or failed items while retaining successful outputs. An interrupted external request whose result was never persisted can run again. PostgreSQL, MinIO, and Qdrant are reconciled through stable identities; they do not share a distributed transaction.
+Incomplete stages return nonzero CLI status. Resume retries missing or failed items while retaining successful outputs. If an incomplete experiment should be abandoned instead, `vdu experiment discard` deletes the experiment and its incomplete exclusive progress; pass `--include-completed` only when completed exclusive stages should be discarded too. An interrupted external request whose result was never persisted can run again. PostgreSQL, MinIO, and Qdrant are reconciled through stable identities; they do not share a distributed transaction.
 
 To compare OCR text retrieval on original queries only with the cached OCR file, use the step-by-step guide in `docs/ocr-text-retriever-comparison.md`.
 

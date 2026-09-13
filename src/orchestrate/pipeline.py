@@ -5,6 +5,8 @@ import hashlib
 import json
 from uuid import UUID
 
+from sqlalchemy import delete, select
+
 from src.config import (
     ChunkConfig,
     EmbeddingConfig,
@@ -23,18 +25,28 @@ from src.evaluate.ir import evaluate_ir
 from src.evaluate.metrics import resolve_metric
 from src.evaluate.ragas import evaluate_ragas, validate_metrics
 from src.evaluate.retrieval import run_retrieval
+from src.evaluate.vector_store import create_vector_store
 from src.evaluate.vectorize import vectorize_chunks, vectorize_pages, vectorize_queries
 from src.stor_rel import crud
+from src.stor_rel.entry import get_db
 from src.stor_rel.schema import (
+    Chunk,
     Dataset,
     EmbeddingRun,
     EvaluationRun,
     Experiment,
     ExperimentQuery,
     ExperimentRun,
+    Generation,
+    GenerationContext,
+    GenerationRun,
     MetricAggregate,
     MetricResult,
+    PageRepresentation,
     Query,
+    Retrieval,
+    RetrievalHit,
+    RetrievalRun,
     RunDependency,
     RunItem,
     StageRun,
@@ -55,6 +67,10 @@ async def require_completed(run_id):
     if run.status != "completed":
         raise IncompleteRunError(run)
     return run
+
+
+def _same_artifact_config(saved: dict, wanted) -> bool:
+    return crud.identity_config(saved) == crud.identity_config(wanted)
 
 
 async def prepare_dataset(
@@ -224,8 +240,8 @@ async def run_experiment(config: ExperimentConfig) -> UUID:
             run = await crud.validate_run(
                 chosen[role], kind=kind, dataset_id=dataset.id
             )
-            if wanted_config is not None and run.config != wanted_config.model_dump(
-                mode="json"
+            if wanted_config is not None and not _same_artifact_config(
+                run.config, wanted_config.model_dump(mode="json")
             ):
                 raise ValueError(
                     f"Reused {role} configuration differs from the experiment"
@@ -280,7 +296,9 @@ async def run_experiment(config: ExperimentConfig) -> UUID:
             run = await crud.validate_run(
                 chosen["generation"], kind="generation", dataset_id=dataset.id
             )
-            if run.config != config.generation.model_dump(mode="json"):
+            if not _same_artifact_config(
+                run.config, config.generation.model_dump(mode="json")
+            ):
                 raise ValueError(
                     "Reused generation configuration differs from the experiment"
                 )
@@ -377,6 +395,192 @@ async def run_suite(configs: list[ExperimentConfig]) -> list[UUID]:
     return [await run_experiment(config) for config in configs]
 
 
+async def discard_experiment(
+    experiment_id: UUID, *, include_completed: bool = False
+) -> dict:
+    """Delete an experiment and progress rows that are not shared elsewhere."""
+    experiment = await crud.get_record(Experiment, experiment_id)
+    async with get_db() as session:
+        associations = list(
+            (
+                await session.scalars(
+                    select(ExperimentRun).where(
+                        ExperimentRun.experiment_id == experiment.id
+                    )
+                )
+            ).all()
+        )
+        candidate_ids = {association.run_id for association in associations}
+        runs = (
+            list(
+                (
+                    await session.scalars(
+                        select(StageRun).where(StageRun.id.in_(candidate_ids))
+                    )
+                ).all()
+            )
+            if candidate_ids
+            else []
+        )
+        run_by_id = {run.id: run for run in runs}
+        linked_elsewhere = (
+            set(
+                (
+                    await session.scalars(
+                        select(ExperimentRun.run_id).where(
+                            ExperimentRun.run_id.in_(candidate_ids),
+                            ExperimentRun.experiment_id != experiment.id,
+                        )
+                    )
+                ).all()
+            )
+            if candidate_ids
+            else set()
+        )
+        delete_ids = {
+            run.id
+            for run in runs
+            if run.id not in linked_elsewhere
+            and (include_completed or run.status != "completed")
+        }
+        while delete_ids:
+            blocked = set(
+                (
+                    await session.scalars(
+                        select(RunDependency.input_run_id).where(
+                            RunDependency.input_run_id.in_(delete_ids),
+                            RunDependency.run_id.not_in(delete_ids),
+                        )
+                    )
+                ).all()
+            )
+            if not blocked:
+                break
+            delete_ids -= blocked
+
+        collection_names = (
+            list(
+                (
+                    await session.scalars(
+                        select(EmbeddingRun.collection_name).where(
+                            EmbeddingRun.id.in_(delete_ids)
+                        )
+                    )
+                ).all()
+            )
+            if delete_ids
+            else []
+        )
+        run_ids = list(delete_ids)
+        if run_ids:
+            retrieval_ids = (
+                select(Retrieval.id).where(Retrieval.run_id.in_(run_ids)).subquery()
+            )
+            generation_ids = (
+                select(Generation.id).where(Generation.run_id.in_(run_ids)).subquery()
+            )
+            await session.execute(
+                delete(MetricAggregate).where(
+                    MetricAggregate.evaluation_run_id.in_(run_ids)
+                )
+            )
+            await session.execute(
+                delete(MetricResult).where(MetricResult.evaluation_run_id.in_(run_ids))
+            )
+            await session.execute(
+                delete(EvaluationRun).where(EvaluationRun.id.in_(run_ids))
+            )
+            await session.execute(
+                delete(GenerationContext).where(
+                    GenerationContext.generation_id.in_(select(generation_ids.c.id))
+                )
+            )
+            await session.execute(
+                delete(Generation).where(Generation.run_id.in_(run_ids))
+            )
+            await session.execute(
+                delete(GenerationRun).where(GenerationRun.id.in_(run_ids))
+            )
+            await session.execute(
+                delete(RetrievalHit).where(
+                    RetrievalHit.retrieval_id.in_(select(retrieval_ids.c.id))
+                )
+            )
+            await session.execute(
+                delete(Retrieval).where(Retrieval.run_id.in_(run_ids))
+            )
+            await session.execute(
+                delete(RetrievalRun).where(RetrievalRun.id.in_(run_ids))
+            )
+            await session.execute(
+                delete(EmbeddingRun).where(EmbeddingRun.id.in_(run_ids))
+            )
+            await session.execute(delete(Chunk).where(Chunk.run_id.in_(run_ids)))
+            await session.execute(
+                delete(PageRepresentation).where(PageRepresentation.run_id.in_(run_ids))
+            )
+            await session.execute(delete(RunItem).where(RunItem.run_id.in_(run_ids)))
+            await session.execute(
+                delete(RunDependency).where(RunDependency.run_id.in_(run_ids))
+            )
+            await session.execute(
+                delete(RunDependency).where(RunDependency.input_run_id.in_(run_ids))
+            )
+            await session.execute(
+                delete(ExperimentRun).where(ExperimentRun.run_id.in_(run_ids))
+            )
+            await session.execute(delete(StageRun).where(StageRun.id.in_(run_ids)))
+
+        await session.execute(
+            delete(ExperimentRun).where(ExperimentRun.experiment_id == experiment.id)
+        )
+        await session.execute(
+            delete(ExperimentQuery).where(
+                ExperimentQuery.experiment_id == experiment.id
+            )
+        )
+        await session.execute(delete(Experiment).where(Experiment.id == experiment.id))
+
+    deleted_collections = []
+    collection_errors = {}
+    for name in collection_names:
+        store = create_vector_store(name)
+        try:
+            if await store.delete_collection():
+                deleted_collections.append(name)
+        except Exception as exc:
+            collection_errors[name] = str(exc)
+        finally:
+            await store.close()
+
+    preserved = []
+    for run_id, run in sorted(run_by_id.items(), key=lambda item: str(item[0])):
+        if run_id in delete_ids:
+            continue
+        reason = "completed"
+        if run_id in linked_elsewhere:
+            reason = "shared with another experiment"
+        elif include_completed:
+            reason = "referenced by preserved downstream run"
+        preserved.append(
+            {
+                "run_id": str(run_id),
+                "kind": run.kind,
+                "status": run.status,
+                "reason": reason,
+            }
+        )
+
+    return {
+        "experiment_id": str(experiment.id),
+        "status": "discarded",
+        "deleted_runs": [str(run_id) for run_id in sorted(delete_ids, key=str)],
+        "preserved_runs": preserved,
+        "deleted_collections": deleted_collections,
+        "collection_errors": collection_errors,
+    }
+
+
 async def compare_experiments(experiment_ids: list[UUID]):
     if len(experiment_ids) < 2 or len(set(experiment_ids)) != len(experiment_ids):
         raise ValueError("Select at least two distinct experiments")
@@ -408,13 +612,14 @@ async def compare_experiments(experiment_ids: list[UUID]):
                 for key, value in run.config.items()
                 if key != "experiment_id"
             }
+            evaluation_identity_config = crud.identity_config(evaluation_config)
             config_hash = hashlib.sha256(
                 json.dumps(
-                    evaluation_config, sort_keys=True, separators=(",", ":")
+                    evaluation_identity_config, sort_keys=True, separators=(",", ":")
                 ).encode()
             ).hexdigest()
             evaluation_key = f"{framework}:{config_hash}"
-            evaluator_configs[evaluation_key] = evaluation_config
+            evaluator_configs[evaluation_key] = evaluation_identity_config
             provenance = {
                 key: value
                 for key, value in run.provenance.items()
@@ -431,6 +636,7 @@ async def compare_experiments(experiment_ids: list[UUID]):
                     "framework": framework,
                     "status": run.status,
                     "config": evaluation_config,
+                    "identity_config": evaluation_identity_config,
                     "provenance": run.provenance,
                     "retrieval_run_id": str(evaluation.retrieval_run_id),
                     "generation_run_id": str(evaluation.generation_run_id)
@@ -496,7 +702,14 @@ async def compare_experiments(experiment_ids: list[UUID]):
     differences = {}
     for key in set().union(*(row["config"] for row in rows)) - {"name", "reuse"}:
         values = {row["experiment_id"]: row["config"].get(key) for row in rows}
-        if any(value != next(iter(values.values())) for value in values.values()):
+        identity_values = {
+            experiment_id: crud.identity_config(value)
+            for experiment_id, value in values.items()
+        }
+        if any(
+            value != next(iter(identity_values.values()))
+            for value in identity_values.values()
+        ):
             differences[key] = values
     return {
         "compatible": not reasons,
@@ -584,6 +797,23 @@ async def run_resume(run_id: UUID) -> UUID:
         )
     elif run.kind == "embed_queries":
         selected = run.provenance.get("selection")
+        if selected is None:
+            experiments = await crud.find_records(ExperimentRun, run_id=run.id)
+            if experiments:
+                selected = [
+                    str(item.query_id)
+                    for item in await crud.find_records(
+                        ExperimentQuery, experiment_id=experiments[0].experiment_id
+                    )
+                ]
+        if selected is None:
+            run_item_selection = [
+                str(item.query_id)
+                for item in await crud.find_records(RunItem, run_id=run.id)
+                if item.query_id is not None
+            ]
+            if run_item_selection:
+                selected = run_item_selection
         result = await vectorize_queries(
             run.dataset_id,
             EmbeddingConfig.model_validate(config),

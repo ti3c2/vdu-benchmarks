@@ -65,6 +65,36 @@ def test_cli_partial_run_returns_nonzero_and_usable_id(monkeypatch):
     assert json.loads(result.stdout)["status"] == "partial"
 
 
+def test_cli_experiment_discard(monkeypatch):
+    experiment_id = uuid4()
+
+    async def discard(id, *, include_completed=False):
+        assert id == experiment_id
+        assert include_completed is True
+        return {"experiment_id": str(id), "status": "discarded"}
+
+    async def dispose():
+        pass
+
+    monkeypatch.setattr(cli, "discard_experiment", discard)
+    monkeypatch.setattr(cli, "dispose_engine", dispose)
+    result = runner.invoke(
+        cli.app,
+        [
+            "experiment",
+            "discard",
+            "--experiment-id",
+            str(experiment_id),
+            "--include-completed",
+        ],
+    )
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {
+        "experiment_id": str(experiment_id),
+        "status": "discarded",
+    }
+
+
 def test_invalid_config_fails_before_stage_execution(tmp_path):
     config = tmp_path / "invalid.yaml"
     config.write_text("dense: null\nsparse: null\n")

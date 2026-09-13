@@ -54,6 +54,54 @@ def test_config_redaction_preserves_model_parameters():
     assert isinstance(result["selected"][0], str)
 
 
+def test_identity_config_ignores_runtime_endpoint_and_batch_settings():
+    first = {
+        "dense": {
+            "endpoint": {
+                "model": "embedding-model",
+                "base_url": "https://first.example/v1",
+                "api_key_env": "FIRST_KEY",
+                "concurrency": 1,
+                "max_retries": 1,
+                "timeout_seconds": 30,
+            },
+            "space_id": "embedding-space",
+            "dimensions": 1024,
+        },
+        "batch_size": 64,
+    }
+    second = {
+        "batch_size": 512,
+        "dense": {
+            "endpoint": {
+                "model": "embedding-model",
+                "base_url": "https://second.example/v1",
+                "api_key_env": "SECOND_KEY",
+                "concurrency": 12,
+                "max_retries": 5,
+                "timeout_seconds": 600,
+            },
+            "space_id": "embedding-space",
+            "dimensions": 1024,
+        },
+    }
+    changed_model = {
+        **second,
+        "dense": {
+            **second["dense"],
+            "endpoint": {**second["dense"]["endpoint"], "model": "other-model"},
+        },
+    }
+    changed_space = {
+        **second,
+        "dense": {**second["dense"], "space_id": "other-space"},
+    }
+
+    assert crud.identity_config(first) == crud.identity_config(second)
+    assert crud.identity_config(first) != crud.identity_config(changed_model)
+    assert crud.identity_config(first) != crud.identity_config(changed_space)
+
+
 @pytest.fixture
 async def storage_db(monkeypatch):
     if os.getenv("VDU_INTEGRATION") != "1":
@@ -217,6 +265,59 @@ async def test_run_reuse_resume_and_dependency_validation(storage_db):
         dataset.id, "preprocess", {"model": "other"}, selection=[str(corpus.id)]
     )
     assert changed.id != run.id
+    embedding = await crud.start_run(
+        dataset.id,
+        "embed_queries",
+        {
+            "dense": {
+                "endpoint": {
+                    "model": "embedder",
+                    "base_url": "https://first.example/v1",
+                    "api_key_env": "FIRST_KEY",
+                },
+                "space_id": "space",
+            },
+            "batch_size": 64,
+        },
+        selection=[str(query.id)],
+    )
+    await crud.finish_run(
+        embedding.id, expected_count=1, completed_count=1, failed_count=0
+    )
+    same_artifact = await crud.start_run(
+        dataset.id,
+        "embed_queries",
+        {
+            "dense": {
+                "endpoint": {
+                    "model": "embedder",
+                    "base_url": "https://second.example/v1",
+                    "api_key_env": "SECOND_KEY",
+                },
+                "space_id": "space",
+            },
+            "batch_size": 512,
+        },
+        selection=[str(query.id)],
+    )
+    assert same_artifact.id == embedding.id
+    different_model = await crud.start_run(
+        dataset.id,
+        "embed_queries",
+        {
+            "dense": {
+                "endpoint": {
+                    "model": "other-embedder",
+                    "base_url": "https://second.example/v1",
+                    "api_key_env": "SECOND_KEY",
+                },
+                "space_id": "space",
+            },
+            "batch_size": 512,
+        },
+        selection=[str(query.id)],
+    )
+    assert different_model.id != embedding.id
     with pytest.raises(IntegrityError):
         await crud.save_record(
             RunItem,

@@ -32,6 +32,7 @@ from src.evaluate.retrieval import run_retrieval
 from src.evaluate.vectorize import vectorize_chunks, vectorize_pages, vectorize_queries
 from src.orchestrate.pipeline import (
     compare_experiments,
+    discard_experiment,
     require_completed,
     run_experiment,
     run_resume,
@@ -337,6 +338,17 @@ def evaluate_ragas_command(
 @experiment_app.command("run")
 def experiment_run(config: Path = typer.Option(..., exists=True, dir_okay=False)):
     _execute(run_experiment(_load(config, ExperimentConfig)), "experiment")
+
+
+@experiment_app.command("discard")
+def experiment_discard(
+    experiment_id: UUID = typer.Option(...),
+    include_completed: bool = typer.Option(
+        False,
+        help="Also delete completed runs that are exclusive to this experiment.",
+    ),
+):
+    _execute(discard_experiment(experiment_id, include_completed=include_completed))
 
 
 @experiment_app.command("compare")

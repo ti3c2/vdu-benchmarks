@@ -140,6 +140,12 @@ class BenchmarkVectorStore(QdrantVectorStore):
     async def collection_exists(self) -> bool:
         return await self._aclient.collection_exists(self.collection_name)
 
+    async def delete_collection(self) -> bool:
+        if not await self.collection_exists():
+            return False
+        await self._aclient.delete_collection(self.collection_name)
+        return True
+
     async def dense_dimensions(self) -> int:
         info = await self._aclient.get_collection(self.collection_name)
         return info.config.params.vectors[DENSE_VECTOR].size

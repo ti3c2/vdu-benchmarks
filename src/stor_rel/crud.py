@@ -43,6 +43,34 @@ def canonical_config(value):
     return value
 
 
+ENDPOINT_RUNTIME_KEYS = {
+    "api_key_env",
+    "base_url",
+    "concurrency",
+    "extra_body",
+    "max_retries",
+    "retry_wait_seconds",
+    "timeout_seconds",
+}
+PIPELINE_RUNTIME_KEYS = {"batch_size", "ragas_max_concurrency"}
+
+
+def identity_config(value):
+    """Keep only fields that affect benchmark artifacts and comparisons."""
+    value = canonical_config(value)
+    if isinstance(value, dict):
+        if "model" in value and any(key in value for key in ENDPOINT_RUNTIME_KEYS):
+            return {"model": identity_config(value["model"])}
+        return {
+            str(key): identity_config(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+            if str(key) not in PIPELINE_RUNTIME_KEYS
+        }
+    if isinstance(value, list):
+        return [identity_config(item) for item in value]
+    return value
+
+
 def implementation_provenance():
     root = Path(__file__).resolve().parents[2]
     digest = hashlib.sha256()
@@ -184,16 +212,20 @@ async def _start_run(
     dataset_id = UUID(str(dataset_id))
     config = canonical_config(config)
     inputs = {role: UUID(str(run_id)) for role, run_id in (inputs or {}).items()}
-    provenance = implementation_provenance()
+    identity_selection = (
+        sorted(set(map(str, selection))) if selection is not None else None
+    )
+    implementation = implementation_provenance()
+    provenance = dict(implementation)
+    if identity_selection is not None:
+        provenance["selection"] = identity_selection
     identity = {
         "dataset_id": str(dataset_id),
         "kind": kind,
-        "config": config,
+        "config": identity_config(config),
         "inputs": {role: str(run_id) for role, run_id in sorted(inputs.items())},
-        "selection": sorted(set(map(str, selection)))
-        if selection is not None
-        else None,
-        "provenance": provenance,
+        "selection": identity_selection,
+        "provenance": implementation,
     }
     fingerprint = hashlib.sha256(
         json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
@@ -243,6 +275,8 @@ async def _start_run(
                 raise ValueError(
                     f"Run {record.id} is already running; use its explicit resume ID after stopping the previous worker"
                 )
+            record.config = config
+            record.provenance = provenance
             record.status = "running"
             record.error = None
             record.started_at = datetime.now(UTC)

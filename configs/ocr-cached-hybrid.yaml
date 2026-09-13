@@ -9,7 +9,7 @@ embeddings:
     endpoint:
       model: qwen/qwen3-embedding-8b
       base_url: https://openrouter.ai/api/v1
-      api_key_env: EMBEDDING_API_KEY
+      api_key_env: OPENAI_EMB_API_KEY
     space_id: qwen3-embedding-8b-dense-v1
     dimensions: 1024
   sparse:

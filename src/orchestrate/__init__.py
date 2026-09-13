@@ -1,5 +1,6 @@
 from .pipeline import (
     compare_experiments,
+    discard_experiment,
     prepare_dataset,
     run_experiment,
     run_resume,
@@ -9,6 +10,7 @@ from .pipeline import (
 __all__ = [
     "prepare_dataset",
     "run_experiment",
+    "discard_experiment",
     "run_suite",
     "compare_experiments",
     "run_resume",

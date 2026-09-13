@@ -112,3 +112,12 @@ uv run vdu run resume --run-id GENERATION_OR_EVALUATION_RUN_UUID
 ```
 
 Resume retries missing or failed items and retains completed outputs when the original inputs, configuration, and implementation fingerprint still match. Missing whole-page OCR and exceeded context budgets fail samples rather than silently truncating pages. After resuming a standalone generation run, run its evaluation command. After a failed full experiment, rerun its config to create a new experiment that reuses the now-completed stages.
+
+If an experiment is wedged or you want to abandon its partial progress, discard the experiment before rerunning the same config:
+
+```bash
+uv run vdu experiment discard --experiment-id FAILED_EXPERIMENT_UUID
+uv run vdu experiment run --config configs/ocr-cached-dense-rag.yaml
+```
+
+Discard removes the experiment and incomplete runs that are exclusive to it. Completed shared stages are preserved by default; add `--include-completed` only when you also want to delete completed exclusive OCR, chunking, embedding, retrieval, generation, or evaluation runs.
