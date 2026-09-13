@@ -9,7 +9,12 @@ from llama_index.core import StorageContext, VectorStoreIndex
 from llama_index.core.schema import TextNode
 
 from src.config import EmbeddingConfig
-from src.evaluate.embeddings import BM25Encoder, create_dense_model, encode_dense
+from src.evaluate.embeddings import (
+    BM25Encoder,
+    create_dense_model,
+    encode_dense,
+)
+from src.evaluate.model_endpoints import verify_model_endpoint
 from src.evaluate.vector_store import create_vector_store
 from src.stor_rel.crud import (
     find_records,
@@ -192,6 +197,9 @@ async def _vectorize(
     completed = 0
     failed = 0
     try:
+        if config.dense:
+            await verify_model_endpoint(config.dense.endpoint, purpose="embedding")
+            dense_model = create_dense_model(config.dense, config.batch_size)
         # A resumed collection can establish inferred dimensions without a new model call.
         exists = await store.collection_exists()
         if exists and config.dense and dimensions is None:
@@ -258,10 +266,6 @@ async def _vectorize(
                     texts = [row["text"] for row, _ in pending]
                     dense_vectors = None
                     if config.dense:
-                        if dense_model is None:
-                            dense_model = create_dense_model(
-                                config.dense, config.batch_size
-                            )
                         values = texts
                         if role == "corpus" and config.dense.modality == "image":
                             if image_store is None:

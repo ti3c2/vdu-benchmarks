@@ -67,10 +67,17 @@ async def test_complete_experiments_reuse_stages_and_compare(
     async def unexpected_ocr(*args, **kwargs):
         raise AssertionError("Experiments must reuse cached OCR")
 
+    async def skip_preflight(*args, **kwargs):
+        return None
+
     monkeypatch.setattr(
         vectorize, "create_dense_model", lambda *args: MockEmbedding(embed_dim=2)
     )
     monkeypatch.setattr(vectorize, "encode_dense", fake_encode)
+    monkeypatch.setattr(
+        "src.evaluate.model_endpoints.verify_model_endpoint",
+        skip_preflight,
+    )
     monkeypatch.setattr(pipeline, "run_generation", generate)
     monkeypatch.setattr(pipeline, "preprocess_pages", unexpected_ocr)
     config = ExperimentConfig(

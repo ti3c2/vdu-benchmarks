@@ -11,6 +11,7 @@ from openai import AsyncOpenAI
 from tenacity import before_sleep_log, retry, stop_after_attempt, wait_fixed
 
 from src.config import GenerationConfig
+from src.evaluate.model_endpoints import verify_model_endpoint
 from src.stor_obj import ObjectStore
 from src.stor_rel.crud import (
     find_records,
@@ -116,6 +117,7 @@ async def run_generation(
     client = None
     if completion is None:
         endpoint = config.endpoint
+        await verify_model_endpoint(endpoint, purpose="generation")
         client = AsyncOpenAI(
             base_url=endpoint.base_url,
             api_key=endpoint.resolve_api_key(),

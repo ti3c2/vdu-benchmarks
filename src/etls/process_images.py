@@ -14,6 +14,7 @@ from openai import AsyncOpenAI
 from tenacity import before_sleep_log, retry, stop_after_attempt, wait_fixed
 
 from src.config import PreprocessConfig
+from src.evaluate.model_endpoints import verify_model_endpoint
 from src.stor_obj import ObjectStore
 from src.stor_rel import crud
 from src.stor_rel.schema import Asset, Corpus, Dataset, PageRepresentation, RunItem
@@ -32,12 +33,14 @@ async def process_image(
     """Run one OCR request, with explicit MIME and independent retry delay."""
     profile = config.endpoint
     owns_client = client is None
-    client = client or AsyncOpenAI(
-        base_url=profile.base_url,
-        api_key=profile.resolve_api_key(),
-        timeout=profile.timeout_seconds,
-        max_retries=0,
-    )
+    if client is None:
+        await verify_model_endpoint(profile, purpose="OCR")
+        client = AsyncOpenAI(
+            base_url=profile.base_url,
+            api_key=profile.resolve_api_key(),
+            timeout=profile.timeout_seconds,
+            max_retries=0,
+        )
 
     @retry(
         stop=stop_after_attempt(profile.max_retries),
@@ -147,6 +150,7 @@ async def preprocess_pages(
         store = object_store or ObjectStore() if cached_texts is None else object_store
         if ocr_processor is None and cached_texts is None:
             profile = config.endpoint
+            await verify_model_endpoint(profile, purpose="OCR")
             client = AsyncOpenAI(
                 base_url=profile.base_url,
                 api_key=profile.resolve_api_key(),

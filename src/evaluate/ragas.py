@@ -17,6 +17,7 @@ from src.config import RagasConfig
 from src.evaluate.generation import CONTEXT_RENDERERS, render_page
 from src.evaluate.ir import persist_aggregates
 from src.evaluate.metrics import resolve_metric
+from src.evaluate.model_endpoints import verify_model_endpoint
 from src.stor_obj import ObjectStore
 from src.stor_rel.crud import (
     find_records,
@@ -85,6 +86,28 @@ def validate_metrics(config: RagasConfig):
             raise ValueError(f"{spec.id} requires parameters.definition")
     if config.embeddings and config.embeddings.modality != "text":
         raise ValueError("Ragas semantic metrics require text evaluator embeddings")
+
+
+def _metric_needs_embeddings(selected) -> bool:
+    spec = resolve_metric(selected.id)
+    if spec.id == "answer_correctness":
+        weights = selected.parameters.get("weights", [0.75, 0.25])
+        if isinstance(weights, list) and len(weights) == 2 and weights[1] == 0:
+            return False
+    return spec.embeddings
+
+
+async def verify_ragas_endpoints(config: RagasConfig):
+    if config.judge and any(
+        resolve_metric(metric.id).judge for metric in config.metrics
+    ):
+        await verify_model_endpoint(config.judge, purpose="Ragas judge")
+    if config.embeddings and any(
+        _metric_needs_embeddings(metric) for metric in config.metrics
+    ):
+        await verify_model_endpoint(
+            config.embeddings.endpoint, purpose="Ragas embedding"
+        )
 
 
 def create_metrics(config: RagasConfig):
@@ -264,6 +287,8 @@ async def evaluate_ragas(
     }
     if set(retrievals) != {q.id for q in queries}:
         raise ValueError("Retrieval query cohort does not match experiment")
+    if metric_factory is None:
+        await verify_ragas_endpoints(config)
     metrics, client = (metric_factory or create_metrics)(config)
     run = await start_run(
         experiment.dataset_id,
