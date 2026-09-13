@@ -1,10 +1,13 @@
 name: ocr-hybrid
 dataset_id: 00000000-0000-0000-0000-000000000000
+queries:
+  rephrase_levels: [0]
 preprocess:
   endpoint:
     model: deepseek-ai/DeepSeek-OCR-2
     base_url: http://localhost:8000/v1
     api_key_env: OCR_API_KEY
+  prompt: Convert the document to markdown.
 embeddings:
   dense:
     endpoint:

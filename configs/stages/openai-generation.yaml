@@ -1,0 +1,13 @@
+# For vdu generate run; replace representation_run_id with the saved OCR run UUID.
+# Full experiments infer this ID from their preprocessing stage instead.
+endpoint:
+  model: gpt-4.1-mini-2025-04-14
+  base_url: https://api.openai.com/v1
+  api_key_env: OPENAI_API_KEY
+  concurrency: 4
+context:
+  representations: [ocr]
+  representation_run_id: 00000000-0000-0000-0000-000000000000
+  page_top_k: 5
+temperature: 0
+max_tokens: 2048

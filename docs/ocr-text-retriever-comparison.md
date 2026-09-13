@@ -114,6 +114,8 @@ Replace the placeholders with the experiment IDs returned in the previous step.
 
 Use `--format json` if you want structured output instead of CSV.
 
+These configs evaluate retrieval only. To generate answers and evaluate the full RAG process from the same saved rankings, follow the [full RAG evaluation guide](rag-evaluation.md). It includes full experiment configs for all three retrievers and standalone generation/evaluation configs, with explicit retrieval reuse so OCR and embeddings do not need to run again.
+
 ## 6. Inspect A Run
 
 If a command returns a run ID or an experiment is incomplete, inspect it with:

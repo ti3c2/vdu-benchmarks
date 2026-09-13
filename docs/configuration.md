@@ -292,6 +292,8 @@ Hybrid retrieval uses Qdrant native RRF over dense and sparse point rankings, th
 
 Generation is optional unless you select Ragas metrics in a full experiment.
 
+For complete OpenAI generation and evaluation examples, including reuse of existing retrieval runs, see [Full RAG evaluation with OpenAI](rag-evaluation.md). Standalone stage configs are in `configs/stages/openai-generation.yaml` and `configs/stages/openai-ragas.yaml`; full experiment configs use the `ocr-cached-*-rag.yaml` suffix.
+
 ```yaml
 generation:
   endpoint:
@@ -385,6 +387,8 @@ reuse:
 ```
 
 `reuse` pins completed stage runs. The pipeline validates that reused runs belong to the same dataset and that their configuration, dependencies, and query cohort match what the experiment needs.
+
+For an existing OCR retrieval pipeline, setting only `reuse.retrieval` also pins its query embeddings, corpus embeddings, chunks, and preprocessing dependencies. The full experiment fills the OCR generation context run ID from that dependency chain. Keep upstream settings identical to the saved experiment, including endpoint settings and embedding batch size; only add or change generation and evaluation settings. See the [reuse walkthrough](rag-evaluation.md#reuse-completed-retrieval-experiments) for commands to find the stage IDs.
 
 Completed stages are also reused automatically when their fingerprint matches. Explicit `reuse` is useful when you want to share a stage across several experiment configs.
 
