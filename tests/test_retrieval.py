@@ -211,12 +211,24 @@ def test_persisted_stages_reuse_query_vectors(monkeypatch, mode):
                     content_hash="0" * 64,
                 )
             await finish_run(chunk_run.id, expected_count=2, completed_count=2)
-            config = EmbeddingConfig(
-                dense=DenseConfig(
-                    endpoint=EndpointProfile(model="fake"), space_id="fixture"
+            dense_profile = DenseConfig(
+                endpoint=EndpointProfile(model="fake"), space_id="fixture"
+            )
+            if mode == "hybrid":
+                dense_config = EmbeddingConfig(dense=dense_profile)
+                dense_query_run_id = await vectorize.vectorize_queries(
+                    dataset.id, dense_config
                 )
-                if mode != "sparse"
-                else None,
+                dense_corpus_run_id = await vectorize.vectorize_chunks(
+                    chunk_run.id, dense_config
+                )
+                for run_id in (dense_query_run_id, dense_corpus_run_id):
+                    collection_names.append(
+                        (await get_record(EmbeddingRun, run_id)).collection_name
+                    )
+                assert len(calls) == 4
+            config = EmbeddingConfig(
+                dense=dense_profile if mode != "sparse" else None,
                 sparse=SparseConfig() if mode != "dense" else None,
             )
             query_run_id = await vectorize.vectorize_queries(dataset.id, config)

@@ -15,11 +15,12 @@ from src.evaluate.embeddings import (
     encode_dense,
 )
 from src.evaluate.model_endpoints import verify_embedding_endpoint
-from src.evaluate.vector_store import create_vector_store
+from src.evaluate.vector_store import DENSE_VECTOR, create_vector_store
 from src.stor_rel.crud import (
     find_records,
     finish_run,
     get_record,
+    identity_config,
     start_run,
     update_record,
     upsert_record,
@@ -33,11 +34,71 @@ from src.stor_rel.schema import (
     EmbeddingRun,
     PageRepresentation,
     Query,
+    RunDependency,
     RunItem,
+    StageRun,
 )
 from src.utils.progress import progress_bar
 
 logger = logging.getLogger(__name__)
+
+
+async def _find_dense_reuse_run(
+    dataset_id: UUID,
+    role: str,
+    unit: str,
+    rows: list[dict],
+    config: EmbeddingConfig,
+    inputs: dict[str, UUID],
+):
+    if config.dense is None or config.sparse is None:
+        return None
+    wanted_dense = identity_config(config.dense.model_dump(mode="json"))
+    wanted_inputs = {
+        input_role: str(run_id) for input_role, run_id in sorted(inputs.items())
+    }
+    wanted_ids = {str(row["id"]) for row in rows}
+    subject_field = {"query": "query_id", "chunk": "chunk_id", "page": "corpus_id"}[
+        unit
+    ]
+    for candidate in await find_records(
+        EmbeddingRun, dataset_id=dataset_id, role=role, unit_kind=unit
+    ):
+        dense_profile = candidate.profiles.get("dense")
+        if dense_profile is None:
+            continue
+        if identity_config(dense_profile) != wanted_dense:
+            continue
+        if candidate.point_count != len(rows):
+            continue
+        run = await get_record(StageRun, candidate.id)
+        if run.status != "completed":
+            continue
+        dependencies = {
+            item.role: str(item.input_run_id)
+            for item in await find_records(RunDependency, run_id=run.id)
+        }
+        if dependencies != wanted_inputs:
+            continue
+        if run.provenance.get("selection") is not None:
+            if set(run.provenance["selection"]) != wanted_ids:
+                continue
+        else:
+            completed = await find_records(RunItem, run_id=run.id, status="completed")
+            completed_ids = {
+                str(getattr(item, subject_field))
+                for item in completed
+                if getattr(item, subject_field) is not None
+            }
+            if completed_ids != wanted_ids:
+                continue
+        store = create_vector_store(candidate.collection_name)
+        try:
+            if await store.collection_exists():
+                return candidate
+        finally:
+            await store.close()
+    return None
 
 
 async def vectorize_queries(
@@ -193,13 +254,20 @@ async def _vectorize(
     vector_index = None
     sparse_model = None
     image_store = None
+    dense_reuse_store = None
     dimensions = config.dense.dimensions if config.dense else None
     completed = 0
     failed = 0
     try:
         if config.dense:
-            await verify_embedding_endpoint(config.dense)
-            dense_model = create_dense_model(config.dense, config.batch_size)
+            dense_reuse = await _find_dense_reuse_run(
+                dataset_id, role, unit, rows, config, inputs
+            )
+            if dense_reuse is not None:
+                dense_reuse_store = create_vector_store(dense_reuse.collection_name)
+            else:
+                await verify_embedding_endpoint(config.dense)
+                dense_model = create_dense_model(config.dense, config.batch_size)
         # A resumed collection can establish inferred dimensions without a new model call.
         exists = await store.collection_exists()
         if exists and config.dense and dimensions is None:
@@ -266,22 +334,37 @@ async def _vectorize(
                     texts = [row["text"] for row, _ in pending]
                     dense_vectors = None
                     if config.dense:
-                        values = texts
-                        if role == "corpus" and config.dense.modality == "image":
-                            if image_store is None:
-                                from src.stor_obj import ObjectStore
-
-                                image_store = ObjectStore()
-                            values = []
+                        if dense_reuse_store is not None:
+                            reused = await dense_reuse_store.load_vectors(
+                                [row["id"] for row, _ in pending]
+                            )
+                            dense_vectors = []
                             for row, _ in pending:
-                                asset = await get_record(Asset, row["asset_id"])
-                                data = await image_store.read_asset(asset)
-                                values.append(
-                                    f"data:{asset.mime_type};base64,{base64.b64encode(data).decode('ascii')}"
+                                vector = reused.get(str(row["id"]), {}).get(
+                                    DENSE_VECTOR
                                 )
-                        dense_vectors = await encode_dense(
-                            dense_model, config.dense, values, role
-                        )
+                                if vector is None:
+                                    raise ValueError(
+                                        "Reusable dense collection is missing vectors"
+                                    )
+                                dense_vectors.append(vector)
+                        else:
+                            values = texts
+                            if role == "corpus" and config.dense.modality == "image":
+                                if image_store is None:
+                                    from src.stor_obj import ObjectStore
+
+                                    image_store = ObjectStore()
+                                values = []
+                                for row, _ in pending:
+                                    asset = await get_record(Asset, row["asset_id"])
+                                    data = await image_store.read_asset(asset)
+                                    values.append(
+                                        f"data:{asset.mime_type};base64,{base64.b64encode(data).decode('ascii')}"
+                                    )
+                            dense_vectors = await encode_dense(
+                                dense_model, config.dense, values, role
+                            )
                         observed = len(dense_vectors[0])
                         if dimensions is not None and dimensions != observed:
                             raise ValueError("Dense dimensions changed between batches")
@@ -392,5 +475,7 @@ async def _vectorize(
     finally:
         if hasattr(dense_model, "aclose"):
             await dense_model.aclose()
+        if dense_reuse_store is not None:
+            await dense_reuse_store.close()
         await store.close()
     return run.id
