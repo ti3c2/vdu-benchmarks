@@ -82,7 +82,7 @@ BM25 uses separate document `.embed()` and query `.query_embed()` paths. Default
 
 Hybrid retrieval uses **Qdrant's native RRF**, then groups by corpus UUID. Fusion operates on point IDs before grouping; different matching chunks of the same page do not reinforce each other during RRF. Arbitrary page/chunk or cross-collection fusion is rejected. Native default RRF parameters and Qdrant version are recorded.
 
-Default retrieval depth is 20 pages. The per-branch candidate budget is `min(point_count, max(100, 10 * page_top_k))`, unless explicitly configured. A candidate budget dominated by one page can yield fewer unique pages; the shortfall is recorded and the budget stays fixed within the run.
+Default retrieval depth is 20 pages. Qdrant exact vector search is enabled by default; set `retrieval.exact: false` for faster approximate dense search. The per-branch candidate budget is `min(point_count, max(100, 10 * page_top_k))`, unless explicitly configured. A candidate budget dominated by one page can yield fewer unique pages; the shortfall is recorded and the budget stays fixed within the run.
 
 ## Generation and evaluation
 

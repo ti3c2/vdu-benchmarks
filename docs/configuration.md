@@ -28,6 +28,7 @@ corpus_unit: chunk
 retrieval:
   mode: dense
   page_top_k: 20
+  exact: true
 ir:
   cutoffs: [1, 5, 10, 20]
 ragas:
@@ -278,6 +279,7 @@ retrieval:
   mode: hybrid
   page_top_k: 20
   prefetch_limit: 200
+  exact: true
 ```
 
 | Field | Meaning |
@@ -285,8 +287,9 @@ retrieval:
 | `mode` | `dense`, `sparse`, or `hybrid`. Must match the vectors stored in the query and corpus embedding runs. |
 | `page_top_k` | Number of corpus pages to save per query. |
 | `prefetch_limit` | Optional per-branch candidate budget before page grouping. Defaults to `min(point_count, max(100, 10 * page_top_k))`. |
+| `exact` | Use Qdrant exact vector search instead of approximate HNSW search. Defaults to `true`; set to `false` for faster approximate dense search. |
 
-Hybrid retrieval uses Qdrant native RRF over dense and sparse point rankings, then groups results by `corpus_id`.
+Hybrid retrieval uses Qdrant native RRF over dense and sparse point rankings, then groups results by `corpus_id`. In hybrid mode, `exact` is applied to each prefetch branch before fusion.
 
 ## Generation
 

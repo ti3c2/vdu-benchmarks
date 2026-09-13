@@ -6,7 +6,13 @@ from uuid import UUID, uuid4
 import pytest
 from llama_index.core.embeddings import MockEmbedding
 
+from src.config import RetrievalConfig
 from src.evaluate.retrieval import rank_page_groups, validate_profiles
+
+
+def test_retrieval_defaults_to_exact_qdrant_search():
+    assert RetrievalConfig().exact is True
+    assert RetrievalConfig(exact=False).exact is False
 
 
 def profiles(*, dataset_id=None, role="query", unit_kind="query", space_id="same"):

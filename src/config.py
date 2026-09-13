@@ -102,6 +102,7 @@ class RetrievalConfig(Config):
     mode: Literal["dense", "sparse", "hybrid"] = "dense"
     page_top_k: int = Field(default=20, gt=0)
     prefetch_limit: int | None = Field(default=None, gt=0)
+    exact: bool = True
 
 
 class ContextConfig(Config):

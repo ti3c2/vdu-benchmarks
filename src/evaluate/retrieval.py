@@ -162,6 +162,7 @@ async def run_retrieval(
             metadata_json={
                 "qdrant_version": version,
                 "effective_prefetch_limit": prefetch,
+                "exact_search": config.exact,
                 "fusion": "rrf" if config.mode == "hybrid" else None,
                 "rrf_k": 2 if config.mode == "hybrid" else None,
                 "group_by": "corpus_id",
@@ -219,6 +220,7 @@ async def run_retrieval(
                             mode=config.mode,
                             page_top_k=config.page_top_k,
                             prefetch_limit=prefetch,
+                            exact=config.exact,
                         )
                         hits = rank_page_groups(groups, run.dataset_id)
                         if len(hits) < config.page_top_k:

@@ -138,6 +138,42 @@ def test_sparse_only_persistence_and_query_idf():
     asyncio.run(exercise())
 
 
+def test_retrieval_passes_qdrant_search_params():
+    async def exercise():
+        client = AsyncQdrantClient(":memory:")
+        store = create_vector_store("retrieval_params", aclient=client)
+        client.query_points_groups = AsyncMock(return_value=SimpleNamespace(groups=[]))
+
+        await store.retrieve_pages(
+            {"dense": [1.0, 0.0]},
+            mode="dense",
+            page_top_k=2,
+            prefetch_limit=10,
+            exact=True,
+        )
+        kwargs = client.query_points_groups.call_args.kwargs
+        assert kwargs["using"] == "dense"
+        assert kwargs["search_params"].exact is True
+
+        client.query_points_groups.reset_mock()
+        await store.retrieve_pages(
+            {
+                "dense": [1.0, 0.0],
+                "sparse": models.SparseVector(indices=[1], values=[1.0]),
+            },
+            mode="hybrid",
+            page_top_k=2,
+            prefetch_limit=10,
+            exact=False,
+        )
+        kwargs = client.query_points_groups.call_args.kwargs
+        assert all(prefetch.params.exact is False for prefetch in kwargs["prefetch"])
+        assert "search_params" not in kwargs
+        await client.close()
+
+    asyncio.run(exercise())
+
+
 @pytest.mark.skipif(
     os.environ.get("VDU_INTEGRATION") != "1", reason="requires real Qdrant"
 )
@@ -180,6 +216,7 @@ def test_native_qdrant_hybrid_groups_unique_pages():
                 mode="hybrid",
                 page_top_k=2,
                 prefetch_limit=3,
+                exact=True,
             )
             assert len(groups) == 2
             assert {str(group.id) for group in groups} == set(pages)

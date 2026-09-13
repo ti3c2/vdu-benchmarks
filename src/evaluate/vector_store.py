@@ -160,7 +160,13 @@ class BenchmarkVectorStore(QdrantVectorStore):
         return (await self._aclient.info()).version
 
     async def retrieve_pages(
-        self, vectors: dict, *, mode: str, page_top_k: int, prefetch_limit: int
+        self,
+        vectors: dict,
+        *,
+        mode: str,
+        page_top_k: int,
+        prefetch_limit: int,
+        exact: bool,
     ):
         required = {
             "dense": [DENSE_VECTOR],
@@ -173,6 +179,7 @@ class BenchmarkVectorStore(QdrantVectorStore):
             raise ValueError(f"Saved query vectors do not support {mode} retrieval")
         if prefetch_limit < 1:
             return []
+        search_params = models.SearchParams(exact=exact)
         kwargs = dict(
             collection_name=self.collection_name,
             group_by="corpus_id",
@@ -186,7 +193,10 @@ class BenchmarkVectorStore(QdrantVectorStore):
                 **kwargs,
                 prefetch=[
                     models.Prefetch(
-                        query=vectors[name], using=name, limit=prefetch_limit
+                        query=vectors[name],
+                        using=name,
+                        params=search_params,
+                        limit=prefetch_limit,
                     )
                     for name in required[mode]
                 ],
@@ -195,7 +205,10 @@ class BenchmarkVectorStore(QdrantVectorStore):
         else:
             name = required[mode][0]
             result = await self._aclient.query_points_groups(
-                **kwargs, query=vectors[name], using=name
+                **kwargs,
+                query=vectors[name],
+                using=name,
+                search_params=search_params,
             )
         return result.groups
 
