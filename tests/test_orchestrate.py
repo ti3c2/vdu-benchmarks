@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -260,6 +261,133 @@ async def test_comparison_reports_incompatible_cohorts(memory):
         "query cohorts differ" in reason
         for reason in comparison["compatibility_reasons"]
     )
+
+
+async def test_list_datasets_includes_datetimes_snapshot_fields_and_metadata(memory):
+    created_at = datetime(2026, 9, 14, 9, 0, tzinfo=UTC)
+    completed = await memory.save(
+        Dataset,
+        source="fixture/source",
+        subset="reports",
+        split="test",
+        revision="main",
+        fingerprint="abc123",
+        status="completed",
+        metadata_json={"documents": 1},
+        created_at=created_at,
+        updated_at=created_at,
+    )
+    await memory.save(
+        Dataset,
+        source="fixture/source",
+        subset="reports",
+        split="train",
+        revision="main",
+        fingerprint="def456",
+        status="failed",
+        metadata_json={},
+        created_at=created_at,
+        updated_at=created_at,
+    )
+
+    listing = await pipeline.list_datasets(status="completed", source="fixture/source")
+
+    assert listing == {
+        "datasets": [
+            {
+                "dataset_id": str(completed.id),
+                "source": "fixture/source",
+                "subset": "reports",
+                "split": "test",
+                "revision": "main",
+                "fingerprint": "abc123",
+                "status": "completed",
+                "created_at": created_at.isoformat(),
+                "updated_at": created_at.isoformat(),
+                "metadata": {"documents": 1},
+            }
+        ]
+    }
+
+
+async def test_list_experiments_includes_datetimes_configs_and_runs(memory):
+    dataset_id = uuid4()
+    created_at = datetime(2026, 9, 13, 12, 0, tzinfo=UTC)
+    updated_at = datetime(2026, 9, 13, 12, 30, tzinfo=UTC)
+    experiment = await memory.save(
+        Experiment,
+        dataset_id=dataset_id,
+        name="dense",
+        status="completed",
+        config={"retrieval": {"mode": "dense"}},
+        created_at=created_at,
+        updated_at=updated_at,
+    )
+    await memory.save(
+        Experiment,
+        dataset_id=dataset_id,
+        name="failed",
+        status="failed",
+        config={},
+        created_at=created_at,
+        updated_at=updated_at,
+    )
+    await memory.save(
+        Experiment,
+        dataset_id=uuid4(),
+        name="other",
+        status="completed",
+        config={},
+        created_at=created_at,
+        updated_at=updated_at,
+    )
+    await memory.save(
+        ExperimentQuery,
+        dataset_id=dataset_id,
+        experiment_id=experiment.id,
+        query_id=uuid4(),
+    )
+    run = await memory.save(
+        StageRun,
+        dataset_id=dataset_id,
+        kind="retrieval",
+        status="completed",
+        started_at=created_at,
+        finished_at=updated_at,
+    )
+    await memory.save(
+        ExperimentRun,
+        dataset_id=dataset_id,
+        experiment_id=experiment.id,
+        run_id=run.id,
+        role="retrieval",
+    )
+
+    listing = await pipeline.list_experiments(dataset_id=dataset_id, status="completed")
+
+    assert listing == {
+        "experiments": [
+            {
+                "experiment_id": str(experiment.id),
+                "name": "dense",
+                "dataset_id": str(dataset_id),
+                "status": "completed",
+                "created_at": created_at.isoformat(),
+                "updated_at": updated_at.isoformat(),
+                "query_count": 1,
+                "runs": {
+                    "retrieval": {
+                        "run_id": str(run.id),
+                        "kind": "retrieval",
+                        "status": "completed",
+                        "started_at": created_at.isoformat(),
+                        "finished_at": updated_at.isoformat(),
+                    }
+                },
+                "config": {"retrieval": {"mode": "dense"}},
+            }
+        ]
+    }
 
 
 async def test_reused_query_cohort_mismatch_is_rejected(memory):

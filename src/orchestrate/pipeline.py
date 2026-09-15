@@ -395,6 +395,81 @@ async def run_suite(configs: list[ExperimentConfig]) -> list[UUID]:
     return [await run_experiment(config) for config in configs]
 
 
+async def list_datasets(status: str | None = None, source: str | None = None):
+    filters = {}
+    if status is not None:
+        filters["status"] = status
+    if source is not None:
+        filters["source"] = source
+
+    rows = []
+    for dataset in await crud.find_records(Dataset, **filters):
+        created_at = getattr(dataset, "created_at", None)
+        updated_at = getattr(dataset, "updated_at", None)
+        rows.append(
+            {
+                "dataset_id": str(dataset.id),
+                "source": dataset.source,
+                "subset": dataset.subset,
+                "split": dataset.split,
+                "revision": dataset.revision,
+                "fingerprint": dataset.fingerprint,
+                "status": dataset.status,
+                "created_at": created_at.isoformat() if created_at else None,
+                "updated_at": updated_at.isoformat() if updated_at else None,
+                "metadata": getattr(dataset, "metadata_json", {}),
+            }
+        )
+    return {"datasets": rows}
+
+
+async def list_experiments(dataset_id: UUID | None = None, status: str | None = None):
+    """List all experiments unless filters are supplied."""
+    filters = {}
+    if dataset_id is not None:
+        filters["dataset_id"] = UUID(str(dataset_id))
+    if status is not None:
+        filters["status"] = status
+
+    rows = []
+    for experiment in await crud.find_records(Experiment, **filters):
+        selections = await crud.find_records(
+            ExperimentQuery, experiment_id=experiment.id
+        )
+        associations = await crud.find_records(
+            ExperimentRun, experiment_id=experiment.id
+        )
+        runs = {}
+        for association in associations:
+            run = await crud.get_record(StageRun, association.run_id)
+            started_at = getattr(run, "started_at", None)
+            finished_at = getattr(run, "finished_at", None)
+            runs[association.role] = {
+                "run_id": str(run.id),
+                "kind": run.kind,
+                "status": run.status,
+                "started_at": started_at.isoformat() if started_at else None,
+                "finished_at": finished_at.isoformat() if finished_at else None,
+            }
+
+        created_at = getattr(experiment, "created_at", None)
+        updated_at = getattr(experiment, "updated_at", None)
+        rows.append(
+            {
+                "experiment_id": str(experiment.id),
+                "name": experiment.name,
+                "dataset_id": str(experiment.dataset_id),
+                "status": experiment.status,
+                "created_at": created_at.isoformat() if created_at else None,
+                "updated_at": updated_at.isoformat() if updated_at else None,
+                "query_count": len(selections),
+                "runs": runs,
+                "config": experiment.config,
+            }
+        )
+    return {"experiments": rows}
+
+
 async def discard_experiment(
     experiment_id: UUID, *, include_completed: bool = False
 ) -> dict:

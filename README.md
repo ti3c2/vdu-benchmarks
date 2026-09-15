@@ -45,6 +45,7 @@ Each stage accepts input IDs and returns its run ID as JSON. Logs go to stderr, 
 
 | Command | Inputs |
 | --- | --- |
+| `vdu dataset list` | Optional source and status filters; returns snapshot metadata |
 | `vdu preprocess run` | Dataset ID; OCR configuration |
 | `vdu chunks build` | Representation-run ID; chunk configuration |
 | `vdu vectorize queries` | Dataset ID; embedding configuration |
@@ -55,10 +56,13 @@ Each stage accepts input IDs and returns its run ID as JSON. Logs go to stderr, 
 | `vdu evaluate ir` | Experiment and retrieval-run IDs; IR configuration |
 | `vdu evaluate ragas` | Experiment, retrieval, optional generation IDs; metric configuration |
 | `vdu run resume` | Existing run ID |
+| `vdu experiment list` | Optional dataset ID and status filters; omit dataset ID to list all experiments |
 | `vdu experiment discard` | Experiment ID; optional completed-run cleanup |
 | `vdu experiment compare` | Experiment IDs |
 | `vdu suite run` | YAML list of complete experiment configurations |
 | `vdu metrics list` | No model or database connection required |
+
+Experiment comparisons are also saved under `data/experiments` with a timestamped filename matching the selected format.
 
 An experiment pins its query cohort and all stage dependencies. `reuse` can explicitly select `representations`, `chunks`, `query_embeddings`, `corpus_embeddings`, `retrieval`, and `generation` run IDs. Completed stages are also reused automatically when their input IDs, query/page selection, configuration, and implementation fingerprint match. Changed configurations create new artifacts.
 

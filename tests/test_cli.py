@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -95,6 +96,98 @@ def test_cli_experiment_discard(monkeypatch):
     }
 
 
+def test_cli_dataset_list(monkeypatch):
+    dataset_id = uuid4()
+    created_at = datetime(2026, 9, 14, 9, 0, tzinfo=UTC).isoformat()
+
+    async def list_existing(status=None, source=None):
+        assert status == "completed"
+        assert source == "fixture/source"
+        return {
+            "datasets": [
+                {
+                    "dataset_id": str(dataset_id),
+                    "source": source,
+                    "subset": "",
+                    "split": "test",
+                    "revision": "main",
+                    "fingerprint": "abc123",
+                    "status": status,
+                    "created_at": created_at,
+                    "updated_at": created_at,
+                    "metadata": {"documents": 1},
+                }
+            ]
+        }
+
+    async def dispose():
+        pass
+
+    monkeypatch.setattr(cli, "list_datasets", list_existing)
+    monkeypatch.setattr(cli, "dispose_engine", dispose)
+    result = runner.invoke(
+        cli.app,
+        [
+            "dataset",
+            "list",
+            "--status",
+            "completed",
+            "--source",
+            "fixture/source",
+        ],
+    )
+    assert result.exit_code == 0
+    assert result.stdout.startswith("{\n  ")
+    payload = json.loads(result.stdout)
+    assert payload["datasets"][0]["dataset_id"] == str(dataset_id)
+    assert payload["datasets"][0]["metadata"] == {"documents": 1}
+
+
+def test_cli_experiment_list(monkeypatch):
+    listed_dataset_id = uuid4()
+    experiment_id = uuid4()
+    created_at = datetime(2026, 9, 13, 12, 0, tzinfo=UTC).isoformat()
+
+    async def list_existing(dataset_id=None, status=None):
+        assert dataset_id is None
+        assert status == "completed"
+        return {
+            "experiments": [
+                {
+                    "experiment_id": str(experiment_id),
+                    "name": "dense",
+                    "dataset_id": str(listed_dataset_id),
+                    "status": "completed",
+                    "created_at": created_at,
+                    "updated_at": created_at,
+                    "query_count": 2,
+                    "runs": {},
+                    "config": {"retrieval": {"mode": "dense"}},
+                }
+            ]
+        }
+
+    async def dispose():
+        pass
+
+    monkeypatch.setattr(cli, "list_experiments", list_existing)
+    monkeypatch.setattr(cli, "dispose_engine", dispose)
+    result = runner.invoke(
+        cli.app,
+        [
+            "experiment",
+            "list",
+            "--status",
+            "completed",
+        ],
+    )
+    assert result.exit_code == 0
+    assert result.stdout.startswith("{\n  ")
+    payload = json.loads(result.stdout)
+    assert payload["experiments"][0]["experiment_id"] == str(experiment_id)
+    assert payload["experiments"][0]["config"]["retrieval"]["mode"] == "dense"
+
+
 def test_invalid_config_fails_before_stage_execution(tmp_path):
     config = tmp_path / "invalid.yaml"
     config.write_text("dense: null\nsparse: null\n")
@@ -106,7 +199,7 @@ def test_invalid_config_fails_before_stage_execution(tmp_path):
     assert "Select at least one" in json.loads(result.stdout)["error"]
 
 
-def test_comparison_csv_identifies_each_evaluation_variant(monkeypatch):
+def test_comparison_csv_identifies_each_evaluation_variant(monkeypatch, tmp_path):
     import csv
     import io
 
@@ -143,6 +236,7 @@ def test_comparison_csv_identifies_each_evaluation_variant(monkeypatch):
 
     monkeypatch.setattr(cli, "compare_experiments", compare)
     monkeypatch.setattr(cli, "dispose_engine", dispose)
+    monkeypatch.chdir(tmp_path)
     result = runner.invoke(
         cli.app,
         [
@@ -160,3 +254,7 @@ def test_comparison_csv_identifies_each_evaluation_variant(monkeypatch):
     rows = list(csv.DictReader(io.StringIO(result.stdout)))
     assert {row["evaluation_run_id"] for row in rows} == set(map(str, evaluation_ids))
     assert {row["evaluation_key"] for row in rows} == {"ir:variant-0", "ir:variant-1"}
+    saved = list((tmp_path / "data" / "experiments").glob("*_comparison.csv"))
+    assert len(saved) == 1
+    assert saved[0].read_text().rstrip() == result.stdout.rstrip()
+    assert "Saved comparison to data/experiments/" in result.stderr

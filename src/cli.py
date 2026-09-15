@@ -4,6 +4,7 @@ import asyncio
 import csv
 import io
 import json
+from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -33,6 +34,8 @@ from src.evaluate.vectorize import vectorize_chunks, vectorize_pages, vectorize_
 from src.orchestrate.pipeline import (
     compare_experiments,
     discard_experiment,
+    list_datasets,
+    list_experiments,
     require_completed,
     run_experiment,
     run_resume,
@@ -76,15 +79,56 @@ for name, group in (
     app.add_typer(group, name=name)
 
 
+def json_dumps(value):
+    return json.dumps(value, default=str, ensure_ascii=False, indent=2)
+
+
+def _compare_csv(result):
+    stream = io.StringIO()
+    fields = [
+        "experiment_id",
+        "name",
+        "dataset_id",
+        "status",
+        "compatible",
+        "framework",
+        "evaluation_run_id",
+        "evaluation_key",
+        "metric_id",
+        "group_by",
+        "group_value",
+        "value",
+        "expected_count",
+        "scored_count",
+        "skipped_count",
+        "failed_count",
+    ]
+    writer = csv.DictWriter(stream, fieldnames=fields)
+    writer.writeheader()
+    for experiment in result["experiments"]:
+        common = {key: experiment[key] for key in fields[:4]}
+        for metric in experiment["metrics"]:
+            writer.writerow({**common, "compatible": result["compatible"], **metric})
+    return stream.getvalue().rstrip()
+
+
+def _save_experiment_comparison(output, output_format):
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+    path = Path("data") / "experiments" / f"{timestamp}_comparison.{output_format}"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"{output}\n")
+    return path
+
+
 def _load(path, model):
     try:
         return load_config(path, model)
     except (OSError, ValueError, yaml.YAMLError) as exc:
-        typer.echo(json.dumps({"error": str(exc)}))
+        typer.echo(json_dumps({"error": str(exc)}))
         raise typer.Exit(2) from exc
 
 
-def _execute(operation, kind="result", output_format="json"):
+def _execute(operation, kind="result", output_format="json", save_comparison=False):
     async def execute():
         try:
             result = await operation
@@ -115,49 +159,43 @@ def _execute(operation, kind="result", output_format="json"):
     try:
         result = asyncio.run(execute())
         if output_format == "csv":
-            stream = io.StringIO()
-            fields = [
-                "experiment_id",
-                "name",
-                "dataset_id",
-                "status",
-                "compatible",
-                "framework",
-                "evaluation_run_id",
-                "evaluation_key",
-                "metric_id",
-                "group_by",
-                "group_value",
-                "value",
-                "expected_count",
-                "scored_count",
-                "skipped_count",
-                "failed_count",
-            ]
-            writer = csv.DictWriter(stream, fieldnames=fields)
-            writer.writeheader()
-            for experiment in result["experiments"]:
-                common = {key: experiment[key] for key in fields[:4]}
-                for metric in experiment["metrics"]:
-                    writer.writerow(
-                        {**common, "compatible": result["compatible"], **metric}
-                    )
-            typer.echo(stream.getvalue().rstrip())
+            output = _compare_csv(result)
+            typer.echo(output)
+            if save_comparison:
+                path = _save_experiment_comparison(output, output_format)
+                typer.echo(f"Saved comparison to {path}", err=True)
             if result["compatibility_reasons"]:
                 typer.echo(
-                    json.dumps(
+                    json_dumps(
                         {"compatibility_reasons": result["compatibility_reasons"]}
                     ),
                     err=True,
                 )
         else:
-            typer.echo(json.dumps(result, default=str, ensure_ascii=False))
+            output = json_dumps(result)
+            typer.echo(output)
+            if save_comparison:
+                path = _save_experiment_comparison(output, output_format)
+                typer.echo(f"Saved comparison to {path}", err=True)
     except Exception as exc:
         details = {"error": str(exc)}
         if hasattr(exc, "run_id"):
             details.update(run_id=str(exc.run_id), status=exc.status)
-        typer.echo(json.dumps(details, ensure_ascii=False))
+        typer.echo(json_dumps(details))
         raise typer.Exit(1) from exc
+
+
+@dataset_app.command("list")
+def dataset_list(
+    status: str | None = typer.Option(
+        None, help="Filter by dataset status; omit to include every status."
+    ),
+    source: str | None = typer.Option(
+        None, help="Filter by exact source name; omit to include every source."
+    ),
+):
+    """List all saved datasets with snapshot metadata."""
+    _execute(list_datasets(status=status, source=source))
 
 
 @dataset_app.command("ingest")
@@ -340,6 +378,17 @@ def experiment_run(config: Path = typer.Option(..., exists=True, dir_okay=False)
     _execute(run_experiment(_load(config, ExperimentConfig)), "experiment")
 
 
+@experiment_app.command("list")
+def experiment_list(
+    dataset_id: UUID | None = typer.Option(
+        None, help="Filter by dataset UUID; omit to list experiments from all datasets."
+    ),
+    status: str | None = typer.Option(None, help="Filter by experiment status."),
+):
+    """List all saved experiments with timestamps, configs, and attached runs."""
+    _execute(list_experiments(dataset_id=dataset_id, status=status))
+
+
 @experiment_app.command("discard")
 def experiment_discard(
     experiment_id: UUID = typer.Option(...),
@@ -358,9 +407,12 @@ def experiment_compare(
     ),
     format: str = typer.Option("json", help="json or csv"),
 ):
+    """Compare experiments and save the rendered output under data/experiments."""
     if format not in {"json", "csv"}:
         raise typer.BadParameter("format must be json or csv")
-    _execute(compare_experiments(experiment_id), output_format=format)
+    _execute(
+        compare_experiments(experiment_id), output_format=format, save_comparison=True
+    )
 
 
 @suite_app.command("run")
@@ -372,7 +424,7 @@ def suite_run(config: Path = typer.Option(..., exists=True, dir_okay=False)):
             raise ValueError("Suite configuration must be a YAML list")
         configs = [ExperimentConfig.model_validate(value) for value in values]
     except (OSError, ValueError, yaml.YAMLError) as exc:
-        typer.echo(json.dumps({"error": str(exc)}))
+        typer.echo(json_dumps({"error": str(exc)}))
         raise typer.Exit(2) from exc
     _execute(run_suite(configs), "suite")
 
@@ -389,7 +441,7 @@ def run_resume_command(run_id: UUID = typer.Option(...)):
 
 @metrics_app.command("list")
 def metrics_list():
-    typer.echo(json.dumps(metric_catalog(), ensure_ascii=False))
+    typer.echo(json_dumps(metric_catalog()))
 
 
 @db_app.command("migrate")
@@ -403,9 +455,9 @@ def db_migrate():
             Config(str(Path(__file__).resolve().parents[1] / "alembic.ini")), "head"
         )
     except Exception as exc:
-        typer.echo(json.dumps({"error": str(exc)}))
+        typer.echo(json_dumps({"error": str(exc)}))
         raise typer.Exit(1) from exc
-    typer.echo(json.dumps({"status": "completed", "revision": "head"}))
+    typer.echo(json_dumps({"status": "completed", "revision": "head"}))
 
 
 if __name__ == "__main__":
