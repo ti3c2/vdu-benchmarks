@@ -146,9 +146,19 @@ chunking:
 | Field | Meaning |
 | --- | --- |
 | `max_chars` | Maximum characters per text chunk. |
-| `overlap_chars` | Character overlap between neighboring chunks. Must be smaller than `max_chars`. |
+| `overlap_chars` | Character overlap when splitting an oversized Markdown block. Must be smaller than `max_chars`. |
 
-Chunking is used when `corpus_unit: chunk`. Page-level image retrieval can skip chunking, unless sparse OCR text is also part of the page-level setup.
+Chunking is used when `corpus_unit: chunk`. It follows Markdown block boundaries:
+paragraphs, headings, lists, blockquotes, code blocks, and pipe tables. Lists stay
+together across blank lines, nested items, and continuation paragraphs when they
+fit within `max_chars`. Oversized lists split between top-level items where
+possible; an oversized item or other block falls back to line, word, then character
+boundaries. Overlap never crosses separate Markdown blocks. Pipe tables use the
+`table` kind; other blocks use `prose`. Chunks retain the original OCR Markdown
+apart from surrounding whitespace, and there is no special HTML-table handling.
+
+With `corpus_unit: page`, chunking is skipped; text and sparse vectors use the full
+page OCR text.
 
 ## Embeddings
 
