@@ -31,6 +31,7 @@ from src.evaluate.metrics import metric_catalog
 from src.evaluate.ragas import evaluate_ragas
 from src.evaluate.retrieval import run_retrieval
 from src.evaluate.vectorize import vectorize_chunks, vectorize_pages, vectorize_queries
+from src.orchestrate.export import export_experiments
 from src.orchestrate.pipeline import (
     compare_experiments,
     discard_experiment,
@@ -387,6 +388,22 @@ def experiment_list(
 ):
     """List all saved experiments with timestamps, configs, and attached runs."""
     _execute(list_experiments(dataset_id=dataset_id, status=status))
+
+
+@experiment_app.command("export")
+def experiment_export(
+    experiment_id: list[UUID] | None = typer.Option(
+        None, help="Repeat to select experiments; omit to export all experiments."
+    ),
+    dataset_id: UUID | None = typer.Option(None, help="Filter by dataset UUID."),
+    output_dir: Path = typer.Option(
+        Path("data/experiments"), help="Directory for per-experiment JSON reports."
+    ),
+):
+    """Export queries, ranked hits, chunk text, answers, and per-query metrics."""
+    _execute(
+        export_experiments(experiment_id, dataset_id=dataset_id, output_dir=output_dir)
+    )
 
 
 @experiment_app.command("discard")

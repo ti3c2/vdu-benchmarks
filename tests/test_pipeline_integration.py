@@ -1,5 +1,6 @@
 """Full orchestration against real stores, with cached OCR and local model doubles."""
 
+import json
 import os
 from uuid import UUID
 
@@ -46,8 +47,9 @@ pytestmark = [
 
 
 async def test_complete_experiments_reuse_stages_and_compare(
-    pipeline_source, monkeypatch
+    pipeline_source, monkeypatch, tmp_path
 ):
+    monkeypatch.chdir(tmp_path)
     source = pipeline_source
     embedding_calls = []
     generation_calls = []
@@ -108,6 +110,13 @@ async def test_complete_experiments_reuse_stages_and_compare(
     client = AsyncQdrantClient(url=get_settings().qdrant_url)
     try:
         first_id = await pipeline.run_experiment(config)
+        report_path = next(
+            (tmp_path / "data/experiments").glob(f"*_{first_id}_results.json")
+        )
+        report = json.loads(report_path.read_text())
+        assert report["status"] == "completed"
+        assert report["queries"] and report["queries"][0]["metrics"]
+        assert report["queries"][0]["answer_text"] is not None
         first_runs = {
             association.role: association.run_id
             for association in await crud.find_records(

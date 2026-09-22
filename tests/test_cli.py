@@ -1,8 +1,10 @@
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from typer.testing import CliRunner
 
 from src import cli
@@ -186,6 +188,35 @@ def test_cli_experiment_list(monkeypatch):
     payload = json.loads(result.stdout)
     assert payload["experiments"][0]["experiment_id"] == str(experiment_id)
     assert payload["experiments"][0]["config"]["retrieval"]["mode"] == "dense"
+
+
+@pytest.mark.parametrize("select_ids", [False, True])
+def test_cli_experiment_export(monkeypatch, tmp_path, select_ids):
+    ids = [uuid4(), uuid4()]
+    dataset_id = uuid4()
+    disposed = []
+
+    async def export(experiment_ids, *, dataset_id=None, output_dir):
+        assert experiment_ids == (ids if select_ids else None)
+        assert dataset_id == expected_dataset_id
+        assert output_dir == (tmp_path if select_ids else Path("data/experiments"))
+        return {"exports": [{"path": "results.json", "query_count": 2}]}
+
+    async def dispose():
+        disposed.append(True)
+
+    expected_dataset_id = dataset_id if select_ids else None
+    monkeypatch.setattr(cli, "export_experiments", export)
+    monkeypatch.setattr(cli, "dispose_engine", dispose)
+    args = ["experiment", "export"]
+    if select_ids:
+        for id in ids:
+            args.extend(["--experiment-id", str(id)])
+        args.extend(["--dataset-id", str(dataset_id), "--output-dir", str(tmp_path)])
+    result = runner.invoke(cli.app, args)
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["exports"][0]["query_count"] == 2
+    assert disposed == [True]
 
 
 def test_invalid_config_fails_before_stage_execution(tmp_path):

@@ -27,6 +27,7 @@ from src.evaluate.ragas import evaluate_ragas, validate_metrics
 from src.evaluate.retrieval import run_retrieval
 from src.evaluate.vector_store import create_vector_store
 from src.evaluate.vectorize import vectorize_chunks, vectorize_pages, vectorize_queries
+from src.orchestrate.export import export_experiments
 from src.stor_rel import crud
 from src.stor_rel.entry import get_db
 from src.stor_rel.schema import (
@@ -377,7 +378,6 @@ async def run_experiment(config: ExperimentConfig) -> UUID:
                 ),
             )
         await crud.update_record(Experiment, experiment.id, status="completed")
-        return experiment.id
     except BaseException as exc:
         await crud.update_record(
             Experiment,
@@ -387,6 +387,16 @@ async def run_experiment(config: ExperimentConfig) -> UUID:
         if isinstance(exc, (KeyboardInterrupt, asyncio.CancelledError)):
             raise
         raise RuntimeError(f"Experiment {experiment.id} failed: {exc}") from exc
+
+    try:
+        await export_experiments([experiment.id])
+    except Exception as exc:
+        raise RuntimeError(
+            f"Experiment {experiment.id} completed, but results export failed: {exc}. "
+            "Retry with vdu experiment export --experiment-id "
+            f"{experiment.id}"
+        ) from exc
+    return experiment.id
 
 
 async def run_suite(configs: list[ExperimentConfig]) -> list[UUID]:

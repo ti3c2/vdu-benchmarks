@@ -133,8 +133,9 @@ async def produced_run(memory, dataset_id, kind, config, status="completed"):
     return run.id
 
 
+@pytest.mark.parametrize("export_fails", [False, True])
 async def test_experiment_freezes_stable_cohort_and_parallel_embeddings(
-    memory, monkeypatch
+    memory, monkeypatch, export_fails
 ):
     config = await fixture_config(memory)
     config.queries.limit = 2
@@ -166,10 +167,25 @@ async def test_experiment_freezes_stable_cohort_and_parallel_embeddings(
             memory, config.dataset_id, "retrieval", retrieval_config
         )
 
+    exported = []
+
+    async def export(ids):
+        assert (await memory.get(Experiment, ids[0])).status == "completed"
+        exported.extend(ids)
+        if export_fails:
+            raise OSError("disk full")
+
     monkeypatch.setattr(pipeline, "vectorize_queries", queries)
     monkeypatch.setattr(pipeline, "vectorize_pages", pages)
     monkeypatch.setattr(pipeline, "run_retrieval", retrieval)
-    experiment_id = await pipeline.run_experiment(config)
+    monkeypatch.setattr(pipeline, "export_experiments", export)
+    if export_fails:
+        with pytest.raises(RuntimeError, match="completed, but results export failed"):
+            await pipeline.run_experiment(config)
+        experiment_id = exported[0]
+    else:
+        experiment_id = await pipeline.run_experiment(config)
+    assert exported == [experiment_id]
     assert (await memory.get(Experiment, experiment_id)).status == "completed"
     assert len(await memory.find(ExperimentQuery, experiment_id=experiment_id)) == 2
     assert {

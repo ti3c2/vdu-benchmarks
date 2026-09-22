@@ -57,12 +57,15 @@ Each stage accepts input IDs and returns its run ID as JSON. Logs go to stderr, 
 | `vdu evaluate ragas` | Experiment, retrieval, optional generation IDs; metric configuration |
 | `vdu run resume` | Existing run ID |
 | `vdu experiment list` | Optional dataset ID and status filters; omit dataset ID to list all experiments |
+| `vdu experiment export` | Optional experiment IDs and dataset filter; writes query-level JSON results |
 | `vdu experiment discard` | Experiment ID; optional completed-run cleanup |
 | `vdu experiment compare` | Experiment IDs |
 | `vdu suite run` | YAML list of complete experiment configurations |
 | `vdu metrics list` | No model or database connection required |
 
 Experiment comparisons are also saved under `data/experiments` with a timestamped filename matching the selected format.
+
+Successful experiments also save a two-space-indented JSON report with every selected query, ranked document/page hits and chunk text, reference answers, generated answers when available, and per-query metrics. Export existing experiments with `uv run vdu experiment export` (all), or add `--experiment-id EXPERIMENT_UUID`. See [Inspect experiment results](docs/experiment-results.md) for the report structure, Python API, and an [example SQL join](docs/sql/experiment_results.sql).
 
 An experiment pins its query cohort and all stage dependencies. `reuse` can explicitly select `representations`, `chunks`, `query_embeddings`, `corpus_embeddings`, `retrieval`, and `generation` run IDs. Completed stages are also reused automatically when their input IDs, query/page selection, configuration, and implementation fingerprint match. Changed configurations create new artifacts.
 
