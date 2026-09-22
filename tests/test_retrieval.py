@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 import pytest
 from llama_index.core.embeddings import MockEmbedding
 
-from src.config import RetrievalConfig
+from src.config import PageEmbeddingConfig, RetrievalConfig
 from src.evaluate.retrieval import rank_page_groups, validate_profiles
 
 
@@ -445,7 +445,9 @@ def test_image_page_hybrid_reads_minio_and_persists_page_points(monkeypatch):
             )
             query_id = await vectorize.vectorize_queries(dataset.id, config)
             corpus_id = await vectorize.vectorize_pages(
-                dataset.id, config, representation_run_id=preprocessing.id
+                dataset.id,
+                PageEmbeddingConfig(**config.model_dump()),
+                representation_run_id=preprocessing.id,
             )
             corpus_run = await get_record(EmbeddingRun, corpus_id)
             assert corpus_run.unit_kind == "page"

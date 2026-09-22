@@ -10,7 +10,9 @@ from src.config import (
     EmbeddingConfig,
     EndpointProfile,
     ExperimentConfig,
+    PageEmbeddingConfig,
     RetrievalConfig,
+    SparseConfig,
 )
 from src.orchestrate import pipeline
 from src.stor_rel.schema import (
@@ -19,6 +21,7 @@ from src.stor_rel.schema import (
     ExperimentQuery,
     ExperimentRun,
     Query,
+    RunDependency,
     RunItem,
     StageRun,
 )
@@ -259,6 +262,56 @@ async def test_query_resume_uses_frozen_selection(memory, monkeypatch):
 
     monkeypatch.setattr(pipeline, "vectorize_queries", resume)
     assert await pipeline.run_resume(source.id) == source.id
+
+
+async def test_page_resume_retains_table_policy(memory, monkeypatch):
+    dataset_id, representation_id = uuid4(), uuid4()
+    source = await memory.save(
+        StageRun,
+        dataset_id=dataset_id,
+        kind="embed_pages",
+        config=PageEmbeddingConfig(
+            sparse=SparseConfig(), include_tables=False
+        ).model_dump(mode="json"),
+        status="failed",
+    )
+    await memory.save(
+        RunDependency,
+        run_id=source.id,
+        role="representations",
+        input_run_id=representation_id,
+    )
+
+    async def resume(dataset_id, embedding, representation_run_id, resume_run_id):
+        assert dataset_id == source.dataset_id
+        assert representation_run_id == representation_id
+        assert resume_run_id == source.id
+        assert embedding.include_tables is False
+        source.status = "completed"
+        return source.id
+
+    monkeypatch.setattr(pipeline, "vectorize_pages", resume)
+    assert await pipeline.run_resume(source.id) == source.id
+
+
+def test_table_exclusion_rejects_chunk_and_image_experiments():
+    with pytest.raises(ValueError, match="requires corpus_unit: page"):
+        ExperimentConfig(
+            name="invalid",
+            dataset_id=uuid4(),
+            embeddings=EmbeddingConfig(sparse=SparseConfig()),
+            page_include_tables=False,
+        )
+    with pytest.raises(ValueError, match="requires text page embeddings"):
+        PageEmbeddingConfig(
+            dense=DenseConfig(
+                endpoint=EndpointProfile(model="image"),
+                space_id="image",
+                modality="image",
+                adapter="vllm",
+            ),
+            include_tables=False,
+        )
 
 
 async def test_comparison_reports_incompatible_cohorts(memory):

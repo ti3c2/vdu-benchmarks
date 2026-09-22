@@ -13,6 +13,7 @@ from src.config import (
     ExperimentConfig,
     GenerationConfig,
     IRConfig,
+    PageEmbeddingConfig,
     PreprocessConfig,
     RagasConfig,
     RetrievalConfig,
@@ -231,7 +232,12 @@ async def run_experiment(config: ExperimentConfig) -> UUID:
             "query_embeddings": ("embed_queries", config.embeddings),
             "corpus_embeddings": (
                 "embed_chunks" if config.corpus_unit == "chunk" else "embed_pages",
-                config.embeddings,
+                config.embeddings
+                if config.corpus_unit == "chunk"
+                else PageEmbeddingConfig(
+                    **config.embeddings.model_dump(),
+                    include_tables=config.page_include_tables,
+                ),
             ),
             "retrieval": ("retrieval", config.retrieval),
         }
@@ -327,7 +333,10 @@ async def run_experiment(config: ExperimentConfig) -> UUID:
                 if config.corpus_unit == "chunk"
                 else vectorize_pages(
                     dataset.id,
-                    config.embeddings,
+                    PageEmbeddingConfig(
+                        **config.embeddings.model_dump(),
+                        include_tables=config.page_include_tables,
+                    ),
                     representation_run_id=chosen.get("representations"),
                 )
             )
@@ -914,7 +923,7 @@ async def run_resume(run_id: UUID) -> UUID:
     elif run.kind == "embed_pages":
         result = await vectorize_pages(
             run.dataset_id,
-            EmbeddingConfig.model_validate(config),
+            PageEmbeddingConfig.model_validate(config),
             representation_run_id=dependencies.get("representations"),
             **kwargs,
         )

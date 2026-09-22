@@ -75,6 +75,10 @@ Incomplete stages return nonzero CLI status. Resume retries missing or failed it
 
 To compare OCR text retrieval on original queries only with the cached OCR file, use the step-by-step guide in `docs/ocr-text-retriever-comparison.md`.
 
+For whole-page dense and sparse retrieval, each with tables included or removed,
+use the [whole-page table comparison](docs/ocr-page-table-comparison.md). Its four
+configs pin the existing FinReport dataset, cached OCR, and original-query vectors.
+
 Those configs use `queries.rephrase_levels: [0]`, so rephrased queries are excluded. BM25 needs no embedding model endpoint. Dense and hybrid need the configured text embedding endpoint. To run the same comparison with live OCR later, use `configs/ocr-sparse.yaml`, `configs/ocr-dense.yaml`, and `configs/ocr-hybrid.yaml`; those additionally require the OCR endpoint.
 
 ## Retrieval configurations

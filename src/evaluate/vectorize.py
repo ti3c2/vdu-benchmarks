@@ -8,7 +8,8 @@ from uuid import UUID
 from llama_index.core import StorageContext, VectorStoreIndex
 from llama_index.core.schema import TextNode
 
-from src.config import EmbeddingConfig
+from src.config import EmbeddingConfig, PageEmbeddingConfig
+from src.etls.text_transforms import remove_tables
 from src.evaluate.embeddings import (
     BM25Encoder,
     create_dense_model,
@@ -68,6 +69,11 @@ async def _find_dense_reuse_run(
         if dense_profile is None:
             continue
         if identity_config(dense_profile) != wanted_dense:
+            continue
+        if (
+            unit == "page"
+            and candidate.profiles.get("include_tables") != config.include_tables
+        ):
             continue
         if candidate.point_count != len(rows):
             continue
@@ -157,11 +163,11 @@ async def vectorize_chunks(
 
 async def vectorize_pages(
     dataset_id: UUID,
-    config: EmbeddingConfig,
+    config: PageEmbeddingConfig,
     representation_run_id: UUID | None = None,
     resume_run_id: UUID | None = None,
 ) -> UUID:
-    """Encode original images and/or full-page text on one point per page."""
+    """Encode one point per page, optionally excluding tables from page text."""
     dataset = await get_record(Dataset, dataset_id)
     if dataset.status != "completed":
         raise ValueError("Dataset ingestion must be completed before vectorization")
@@ -186,21 +192,35 @@ async def vectorize_pages(
                     )
                 representations[representation.corpus_id] = representation
     rows = []
+    empty_pages = 0
     for page in sorted(pages, key=lambda page: page.id):
         representation = representations.get(page.id)
         if needs_text and representation is None:
             raise ValueError(
                 f"Page {page.id} has no full-page text in representation run"
             )
+        text = representation.text if representation else ""
+        if not config.include_tables:
+            text = remove_tables(text)
+            if not text.strip():
+                empty_pages += 1
+                continue
         rows.append(
             {
                 "id": page.id,
                 "corpus_id": page.id,
                 "asset_id": page.asset_id,
-                "text": representation.text if representation else "",
+                "text": text,
                 "representation_id": representation.id if representation else None,
             }
         )
+    if empty_pages:
+        logger.info(
+            "Excluded %s pages with no text after table removal; their qrels remain in evaluation",
+            empty_pages,
+        )
+    if not rows:
+        raise ValueError("No pages contain indexable text after table removal")
     return await _vectorize(
         dataset_id,
         "page",

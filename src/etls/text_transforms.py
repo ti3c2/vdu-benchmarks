@@ -5,6 +5,97 @@ import re
 from markdown_it import MarkdownIt
 
 
+def remove_tables(text: str) -> str:
+    """Remove Markdown, HTML, and LaTeX tables, retaining surrounding source text.
+
+    As in chunking, pipe rows without a valid separator are treated as OCR
+    tables, including rows missing an outer pipe. HTML layout tables and LaTeX
+    array/tabular environments are removed too. Unclosed HTML/LaTeX tables
+    extend to the end of the page. Code blocks are kept.
+    """
+    line_offsets = [0, *(match.end() for match in re.finditer(r"\r\n?|\n", text))]
+    line_offsets.append(len(text))
+    tokens = MarkdownIt("commonmark", {"html": False}).enable("table").parse(text)
+    removed = []
+    code_blocks = []
+    for token in tokens:
+        if token.map is None:
+            continue
+        start, end = (line_offsets[line] for line in token.map)
+        if token.type in {"fence", "code_block"}:
+            code_blocks.append((start, end))
+        elif token.type == "table_open":
+            removed.append((start, end))
+        elif token.type == "paragraph_open":
+            pipe_rows = []
+            for line in range(*token.map):
+                line_start, line_end = line_offsets[line : line + 2]
+                stripped = text[line_start:line_end].strip()
+                if len(re.findall(r"(?<!\\)\|", stripped)) >= 2:
+                    pipe_rows.append((line, line_start, line_end, stripped))
+            for index, (line, line_start, line_end, stripped) in enumerate(pipe_rows):
+                if (
+                    stripped.startswith("|")
+                    or stripped.endswith("|")
+                    or (index > 0 and pipe_rows[index - 1][0] == line - 1)
+                    or (
+                        index + 1 < len(pipe_rows)
+                        and pipe_rows[index + 1][0] == line + 1
+                    )
+                ):
+                    removed.append((line_start, line_end))
+
+    depth = 0
+    table_start = None
+    for tag in re.finditer(r"</?table\b[^>]*>", text, re.IGNORECASE):
+        if any(start <= tag.start() < end for start, end in code_blocks):
+            continue
+        if tag.group().startswith("</"):
+            if depth:
+                depth -= 1
+                if depth == 0:
+                    removed.append((table_start, tag.end()))
+        else:
+            if depth == 0:
+                table_start = tag.start()
+            depth += 1
+    if depth:
+        removed.append((table_start, len(text)))
+
+    environments = []
+    for tag in re.finditer(
+        r"\\(begin|end)\{(array|tabular\*?|table\*?|smalltable)\}", text
+    ):
+        if any(start <= tag.start() < end for start, end in code_blocks):
+            continue
+        if tag[1] == "begin":
+            if not environments:
+                table_start = tag.start()
+                # Remove an adjacent display-math wrapper with its table.
+                wrapper = re.search(r"(?:\\\[|\$\$)\s*$", text[:table_start])
+                if wrapper:
+                    table_start = wrapper.start()
+            environments.append(tag[2])
+        elif environments and environments[-1] == tag[2]:
+            environments.pop()
+            if not environments:
+                wrapper = re.match(r"\s*(?:\\\]|\$\$)", text[tag.end() :])
+                removed.append(
+                    (table_start, tag.end() + (wrapper.end() if wrapper else 0))
+                )
+    if environments:
+        removed.append((table_start, len(text)))
+
+    parts = []
+    cursor = 0
+    for start, end in sorted(removed):
+        if start > cursor:
+            parts.append(text[cursor:start])
+        cursor = max(cursor, end)
+    parts.append(text[cursor:])
+    return "".join(parts)
+
+
 def split_markdown(text: str, max_chars: int = 4000, overlap_chars: int = 0):
     """Yield ``(kind, text)`` chunks without deleting OCR content.
 

@@ -23,7 +23,9 @@ from src.config import (
     MetricConfig,
     RagasConfig,
     RetrievalConfig,
+    SparseConfig,
 )
+from src.etls.text_transforms import remove_tables
 from src.evaluate import vectorize
 from src.evaluate.generation import run_generation
 from src.orchestrate import pipeline
@@ -34,6 +36,8 @@ from src.stor_rel.schema import (
     Experiment,
     ExperimentQuery,
     ExperimentRun,
+    MetricAggregate,
+    PageRepresentation,
     StageRun,
 )
 
@@ -44,6 +48,142 @@ pytestmark = [
         reason="requires PostgreSQL, MinIO, and Qdrant",
     ),
 ]
+
+
+@pytest.mark.parametrize("mode", ["dense", "sparse"])
+async def test_page_table_ablation_end_to_end(
+    pipeline_source, monkeypatch, tmp_path, mode
+):
+    monkeypatch.chdir(tmp_path)
+    source = pipeline_source
+    calls = []
+
+    async def fake_encode(model, config, values, role):
+        calls.extend((role, value) for value in values)
+        return [[1.0, 0.0] for _ in values]
+
+    async def skip_preflight(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(vectorize, "encode_dense", fake_encode)
+    monkeypatch.setattr(vectorize, "verify_embedding_endpoint", skip_preflight)
+    monkeypatch.setattr(
+        vectorize, "create_dense_model", lambda *args: MockEmbedding(embed_dim=2)
+    )
+    representations = await crud.find_records(
+        PageRepresentation, run_id=source.preprocess_id
+    )
+    # A table-only page and a page larger than the chunk limit exercise both edges.
+    await crud.update_record(
+        PageRepresentation,
+        representations[0].id,
+        text="| Report | Value |\n| --- | --- |\n| Revenue | 42 |",
+    )
+    await crud.update_record(
+        PageRepresentation,
+        representations[1].id,
+        text="Report prose. " * 500
+        + "\n\n<table><tr><td>Secret cell</td></tr></table>",
+    )
+    originals = {
+        str(row.corpus_id): row.text
+        for row in await crud.find_records(
+            PageRepresentation, run_id=source.preprocess_id
+        )
+    }
+    config = ExperimentConfig(
+        name=f"page-{mode}",
+        dataset_id=source.dataset_id,
+        corpus_unit="page",
+        embeddings=EmbeddingConfig(
+            dense=DenseConfig(
+                endpoint=EndpointProfile(model="fixture-dense"),
+                dimensions=2,
+                space_id="fixture-space",
+            )
+            if mode == "dense"
+            else None,
+            sparse=SparseConfig() if mode == "sparse" else None,
+        ),
+        retrieval=RetrievalConfig(mode=mode, page_top_k=4),
+        ir=IRConfig(cutoffs=[1, 4]),
+        reuse={"representations": source.preprocess_id},
+    )
+    client = AsyncQdrantClient(url=get_settings().qdrant_url)
+    variants = []
+    try:
+        for include_tables in (True, False):
+            config.page_include_tables = include_tables
+            experiment_id = await pipeline.run_experiment(config)
+            runs = {
+                row.role: row.run_id
+                for row in await crud.find_records(
+                    ExperimentRun, experiment_id=experiment_id
+                )
+            }
+            variants.append(runs)
+            assert "chunks" not in runs
+            embedding = await crud.get_record(EmbeddingRun, runs["corpus_embeddings"])
+            expected = {
+                page_id: text if include_tables else remove_tables(text)
+                for page_id, text in originals.items()
+                if include_tables or remove_tables(text).strip()
+            }
+            assert embedding.unit_kind == "page"
+            assert embedding.profiles["include_tables"] == include_tables
+            assert (
+                embedding.point_count == len(expected) == (4 if include_tables else 3)
+            )
+            points, _ = await client.scroll(
+                embedding.collection_name, limit=10, with_payload=True
+            )
+            assert {
+                str(point.id): json.loads(point.payload["_node_content"])["text"]
+                for point in points
+            } == expected
+            metrics = await crud.find_records(
+                MetricAggregate, evaluation_run_id=runs["ir"]
+            )
+            assert metrics and all(metric.failed_count == 0 for metric in metrics)
+            assert (
+                await crud.get_record(Experiment, experiment_id)
+            ).status == "completed"
+            assert next(
+                (tmp_path / "data/experiments").glob(f"*_{experiment_id}_results.json")
+            )
+
+        assert variants[0]["query_embeddings"] == variants[1]["query_embeddings"]
+        assert variants[0]["corpus_embeddings"] != variants[1]["corpus_embeddings"]
+        assert {
+            str(row.corpus_id): row.text
+            for row in await crud.find_records(
+                PageRepresentation, run_id=source.preprocess_id
+            )
+        } == originals
+        if mode == "dense":
+            assert sum(role == "query" for role, _ in calls) == len(source.queries)
+            assert [value for role, value in calls if role == "corpus"] == [
+                text
+                for include_tables in (True, False)
+                for _, text in sorted(
+                    (page_id, text if include_tables else remove_tables(text))
+                    for page_id, text in originals.items()
+                    if include_tables or remove_tables(text).strip()
+                )
+            ]
+
+        config.reuse["corpus_embeddings"] = variants[0]["corpus_embeddings"]
+        with pytest.raises(
+            RuntimeError, match="Reused corpus_embeddings configuration differs"
+        ):
+            await pipeline.run_experiment(config)
+    finally:
+        for embedding in await crud.find_records(
+            EmbeddingRun, dataset_id=source.dataset_id
+        ):
+            if await client.collection_exists(embedding.collection_name):
+                await client.delete_collection(embedding.collection_name)
+        await client.close()
 
 
 async def test_complete_experiments_reuse_stages_and_compare(

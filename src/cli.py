@@ -19,6 +19,7 @@ from src.config import (
     ExperimentConfig,
     GenerationConfig,
     IRConfig,
+    PageEmbeddingConfig,
     PreprocessConfig,
     RagasConfig,
     RetrievalConfig,
@@ -367,7 +368,7 @@ def vectorize_pages_command(
     _execute(
         vectorize_pages(
             dataset_id,
-            _load(config, EmbeddingConfig),
+            _load(config, PageEmbeddingConfig),
             representation_run_id=representation_run_id,
             resume_run_id=resume_run_id,
         ),

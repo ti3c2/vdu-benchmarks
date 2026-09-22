@@ -2,7 +2,7 @@
 
 Experiment configs are YAML files that validate against `ExperimentConfig` in `src/config.py`. Unknown keys are rejected, so misspellings usually fail early instead of being ignored.
 
-Most commands also accept smaller stage configs. For example, `vdu vectorize queries --config ...` expects only an `EmbeddingConfig`, while `vdu experiment run --config ...` expects the complete experiment shape described here.
+Most commands also accept smaller stage configs. For example, `vdu vectorize queries --config ...` expects only an `EmbeddingConfig`, while `vdu experiment run --config ...` expects the complete experiment shape described here. `vdu vectorize pages` accepts a `PageEmbeddingConfig`: the same embedding fields plus `include_tables` (default `true`).
 
 ## Complete Experiment Shape
 
@@ -48,6 +48,7 @@ The required top-level fields are `name`, `dataset_id`, and `embeddings`. Other 
 | `chunking` | How OCR text is split for `corpus_unit: chunk`. |
 | `embeddings` | Dense, sparse, or hybrid embedding profile. |
 | `corpus_unit` | `chunk` or `page`. Chunk retrieval embeds OCR chunks. Page retrieval embeds one point per page. |
+| `page_include_tables` | Defaults to `true`. Set to `false` with `corpus_unit: page` to remove tables before encoding page text. Does not change query embeddings or stored OCR. Not supported for image embeddings. |
 | `retrieval` | Retrieval mode and depth. |
 | `generation` | Optional answer generation configuration. Required if `ragas.metrics` is nonempty in a full experiment. |
 | `ir` | IR metric configuration. Set to `null` to skip IR evaluation. |
@@ -158,7 +159,19 @@ boundaries. Overlap never crosses separate Markdown blocks. Pipe tables use the
 apart from surrounding whitespace, and there is no special HTML-table handling.
 
 With `corpus_unit: page`, chunking is skipped; text and sparse vectors use the full
-page OCR text.
+page OCR text. Set `page_include_tables: false` to exclude Markdown pipe tables,
+HTML tables (including layout tables), and LaTeX `array`, `tabular`, `table`, and
+`smalltable` environments from the index. The filter handles malformed pipe rows
+with missing separators/outer borders; fenced and indented code blocks remain.
+Unclosed HTML/LaTeX tables extend to the end of the page. Surrounding prose,
+captions, and footnotes remain; plain text with no table structure cannot reliably
+be identified as a table.
+
+Pages with no remaining text are omitted from the index; their queries and qrels
+stay in evaluation. Stored OCR and later generation contexts keep the original
+tables. Each table policy has its own corpus embedding run/collection; query
+embeddings can be shared. See [whole-page table experiments](ocr-page-table-comparison.md)
+for four runnable FinReport configs using existing database artifacts.
 
 ## Embeddings
 

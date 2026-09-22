@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from src.etls.text_transforms import split_markdown
+from src.etls.text_transforms import remove_tables, split_markdown
 
 OCR_FIXTURE = (
     Path(__file__).parents[1]
@@ -189,3 +189,50 @@ def test_invalid_chunk_bounds():
         list(split_markdown("text", max_chars=0))
     with pytest.raises(ValueError):
         list(split_markdown("text", max_chars=4, overlap_chars=4))
+
+
+@pytest.mark.parametrize(
+    "table",
+    [
+        "| Name | Value |\n| --- | --- |\n| A | 10 |",
+        "Name | Value\n--- | ---\nA | 10",
+        "| Name | Value |\n| A | 10 |",
+        "| Name | Value |\n| --- | --- | --- |\n| A | 10 |",
+        "Name | Value |\nA | 10 |",
+        "Name | Value | Units\nA | 10 | USD",
+        '<TABLE class="ocr"><tr><td>A</td><td>10</td></tr></TABLE>',
+        "<table>Outer<table>Inner</table>More</table>",
+        "> | Name | Value |\n> | --- | --- |\n> | A | 10 |",
+        r"\[\begin{array}{|c|c|} Name & Value \\ A & 10 \end{array}\]",
+        r"$$\begin{tabular}{cc} Name & Value \\ A & 10 \end{tabular}$$",
+        r"\begin{table}\begin{tabular}{cc} A & 10 \end{tabular}\end{table}",
+    ],
+)
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_remove_tables_preserves_surrounding_prose(table, newline):
+    text = f"# Report\n\n{table}\n\n- Keep this list\n\nFootnote."
+    result = remove_tables(text.replace("\n", newline))
+    assert result.startswith(f"# Report{newline}{newline}")
+    assert result.endswith(f"- Keep this list{newline}{newline}Footnote.")
+    assert "10" not in result and "table" not in result.lower()
+    assert "Name" not in result
+    assert "\\begin" not in result and "\\end" not in result
+    assert "\\[" not in result and "\\]" not in result and "$$" not in result
+
+
+def test_remove_tables_retains_code_blocks_and_long_prose():
+    text = (
+        "Keep this paragraph. " * 1000
+        + "\n\n```html\n<table>Example</table>\n```\n\n"
+        + "    | A | B |\n    | --- | --- |\n\n"
+        + "[ref]: /reference\n"
+    )
+    assert remove_tables(text) == text
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["", " \n\t", "| A | B |\n| --- | --- |\n| 1 | 2 |", "<table>Unclosed OCR"],
+)
+def test_table_only_pages_become_empty(text):
+    assert not remove_tables(text).strip()

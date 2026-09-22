@@ -98,6 +98,16 @@ class EmbeddingConfig(Config):
         return self
 
 
+class PageEmbeddingConfig(EmbeddingConfig):
+    include_tables: bool = True
+
+    @model_validator(mode="after")
+    def check_table_filter(self):
+        if not self.include_tables and self.dense and self.dense.modality == "image":
+            raise ValueError("Table exclusion requires text page embeddings")
+        return self
+
+
 class RetrievalConfig(Config):
     mode: Literal["dense", "sparse", "hybrid"] = "dense"
     page_top_k: int = Field(default=20, gt=0)
@@ -161,6 +171,7 @@ class ExperimentConfig(Config):
     chunking: ChunkConfig = Field(default_factory=ChunkConfig)
     embeddings: EmbeddingConfig
     corpus_unit: Literal["chunk", "page"] = "chunk"
+    page_include_tables: bool = True
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     generation: GenerationConfig | None = None
     ir: IRConfig | None = Field(default_factory=IRConfig)
@@ -169,6 +180,12 @@ class ExperimentConfig(Config):
 
     @model_validator(mode="after")
     def check_pipeline(self):
+        if not self.page_include_tables and self.corpus_unit != "page":
+            raise ValueError("page_include_tables: false requires corpus_unit: page")
+        if self.corpus_unit == "page":
+            PageEmbeddingConfig(
+                **self.embeddings.model_dump(), include_tables=self.page_include_tables
+            )
         if self.ir and max(self.ir.cutoffs) > self.retrieval.page_top_k:
             raise ValueError("IR cutoffs exceed retrieval.page_top_k")
         if (
