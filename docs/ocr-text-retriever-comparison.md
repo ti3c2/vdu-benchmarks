@@ -112,7 +112,13 @@ uv run vdu experiment compare \
 
 Replace the placeholders with the experiment IDs returned in the previous step.
 
-Use `--format json` if you want structured output instead of CSV.
+The default is a wide CSV with metrics in the first column and experiment names
+as the remaining column headers. It uses dataset-level scores grouped by cutoff:
+`P@1`, `R@1`, `RR@1`, `nDCG@1`, then the same metrics at 5, 10, and 20.
+Metrics without a cutoff follow those groups. Use `--layout long`
+for the original detailed table, including subgroup scores and coverage, or
+`--format json` for structured output. The original full JSON with run IDs and
+configs is available with `--layout long --format json`.
 
 These configs evaluate retrieval only. To generate answers and evaluate the full RAG process from the same saved rankings, follow the [full RAG evaluation guide](rag-evaluation.md). It includes full experiment configs for all three retrievers and standalone generation/evaluation configs, with explicit retrieval reuse so OCR and embeddings do not need to run again.
 

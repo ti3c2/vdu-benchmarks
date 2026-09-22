@@ -50,6 +50,7 @@ uv run vdu experiment compare \
   --experiment-id BM25_EXPERIMENT_UUID \
   --experiment-id DENSE_EXPERIMENT_UUID \
   --experiment-id HYBRID_EXPERIMENT_UUID \
+  --layout long \
   --format json
 ```
 
@@ -104,7 +105,11 @@ uv run vdu experiment compare \
   --format csv
 ```
 
-Use JSON to inspect run IDs, evaluation configurations, and compatibility reasons. Comparing an experiment that has Ragas scores with one that only has IR scores reports different evaluator configurations.
+The default table has one metric per row and one experiment per column. Use
+`--layout long --format json` to inspect run IDs, evaluation configurations, and
+compatibility reasons, or `--layout long --format csv` for the original detailed
+table. Comparing an experiment that has Ragas scores with one that only has IR
+scores reports different evaluator configurations.
 
 ```bash
 uv run vdu run show --run-id GENERATION_OR_EVALUATION_RUN_UUID

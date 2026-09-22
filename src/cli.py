@@ -4,6 +4,8 @@ import asyncio
 import csv
 import io
 import json
+import re
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from uuid import UUID
@@ -84,40 +86,104 @@ def json_dumps(value):
     return json.dumps(value, default=str, ensure_ascii=False, indent=2)
 
 
-def _compare_csv(result):
-    stream = io.StringIO()
-    fields = [
-        "experiment_id",
-        "name",
-        "dataset_id",
-        "status",
-        "compatible",
-        "framework",
-        "evaluation_run_id",
-        "evaluation_key",
-        "metric_id",
-        "group_by",
-        "group_value",
-        "value",
-        "expected_count",
-        "scored_count",
-        "skipped_count",
-        "failed_count",
+def _compare_wide(result):
+    """Pivot dataset aggregates, keeping evaluator variants distinct."""
+    experiments = result["experiments"]
+    names = [
+        experiment["name"] or experiment["experiment_id"] for experiment in experiments
     ]
+    name_counts = Counter(names)
+    fields = ["metric"]
+    for experiment, name in zip(experiments, names, strict=True):
+        if name_counts[name] > 1 or name == "metric":
+            name = f"{name} [{experiment['experiment_id']}]"
+        while name in fields:
+            name = f"{name} [{experiment['experiment_id']}]"
+        fields.append(name)
+
+    values = {}
+    for experiment, column in zip(experiments, fields[1:], strict=True):
+        for metric in experiment["metrics"]:
+            if metric["group_by"] != "dataset":
+                continue
+            key = (metric["metric_id"], metric["evaluation_key"])
+            row = values.setdefault(key, {})
+            if column in row:
+                raise ValueError(
+                    f"Multiple evaluation runs supply {metric['metric_id']} "
+                    f"with evaluation key {metric['evaluation_key']} for {column}. "
+                    "Use --layout long to inspect each run separately."
+                )
+            row[column] = metric["value"]
+
+    variant_counts = Counter(metric_id for metric_id, _ in values)
+    rows = []
+    for metric_id, evaluation_key in sorted(
+        values,
+        key=lambda key: (
+            int(key[0].rsplit("@", 1)[1])
+            if re.search(r"@\d+$", key[0])
+            else float("inf"),
+            tuple(
+                int(part) if part.isdigit() else part
+                for part in re.split(r"(\d+)", key[0])
+            ),
+            key[1],
+        ),
+    ):
+        label = metric_id
+        if variant_counts[metric_id] > 1:
+            label = f"{metric_id} [{evaluation_key}]"
+        row = values[(metric_id, evaluation_key)]
+        rows.append(
+            {"metric": label, **{column: row.get(column) for column in fields[1:]}}
+        )
+    return fields, rows
+
+
+def _compare_csv(result, layout="wide"):
+    stream = io.StringIO()
+    if layout == "wide":
+        fields, rows = _compare_wide(result)
+    else:
+        fields = [
+            "experiment_id",
+            "name",
+            "dataset_id",
+            "status",
+            "compatible",
+            "framework",
+            "evaluation_run_id",
+            "evaluation_key",
+            "metric_id",
+            "group_by",
+            "group_value",
+            "value",
+            "expected_count",
+            "scored_count",
+            "skipped_count",
+            "failed_count",
+        ]
+        rows = []
+        for experiment in result["experiments"]:
+            common = {key: experiment[key] for key in fields[:4]}
+            for metric in experiment["metrics"]:
+                rows.append({**common, "compatible": result["compatible"], **metric})
     writer = csv.DictWriter(stream, fieldnames=fields)
     writer.writeheader()
-    for experiment in result["experiments"]:
-        common = {key: experiment[key] for key in fields[:4]}
-        for metric in experiment["metrics"]:
-            writer.writerow({**common, "compatible": result["compatible"], **metric})
+    writer.writerows(rows)
     return stream.getvalue().rstrip()
 
 
-def _save_experiment_comparison(output, output_format):
+def _save_experiment_comparison(output, output_format, layout):
     timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
-    path = Path("data") / "experiments" / f"{timestamp}_comparison.{output_format}"
+    path = (
+        Path("data")
+        / "experiments"
+        / f"{timestamp}_comparison_{layout}.{output_format}"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"{output}\n")
+    path.write_text(f"{output}\n", encoding="utf-8")
     return path
 
 
@@ -129,7 +195,13 @@ def _load(path, model):
         raise typer.Exit(2) from exc
 
 
-def _execute(operation, kind="result", output_format="json", save_comparison=False):
+def _execute(
+    operation,
+    kind="result",
+    output_format="json",
+    save_comparison=False,
+    comparison_layout="wide",
+):
     async def execute():
         try:
             result = await operation
@@ -160,11 +232,18 @@ def _execute(operation, kind="result", output_format="json", save_comparison=Fal
     try:
         result = asyncio.run(execute())
         if output_format == "csv":
-            output = _compare_csv(result)
-            typer.echo(output)
-            if save_comparison:
-                path = _save_experiment_comparison(output, output_format)
-                typer.echo(f"Saved comparison to {path}", err=True)
+            output = _compare_csv(result, comparison_layout)
+        else:
+            payload = (
+                _compare_wide(result)[1]
+                if save_comparison and comparison_layout == "wide"
+                else result
+            )
+            output = json_dumps(payload)
+        typer.echo(output)
+        if save_comparison:
+            path = _save_experiment_comparison(output, output_format, comparison_layout)
+            typer.echo(f"Saved comparison to {path}", err=True)
             if result["compatibility_reasons"]:
                 typer.echo(
                     json_dumps(
@@ -172,12 +251,6 @@ def _execute(operation, kind="result", output_format="json", save_comparison=Fal
                     ),
                     err=True,
                 )
-        else:
-            output = json_dumps(result)
-            typer.echo(output)
-            if save_comparison:
-                path = _save_experiment_comparison(output, output_format)
-                typer.echo(f"Saved comparison to {path}", err=True)
     except Exception as exc:
         details = {"error": str(exc)}
         if hasattr(exc, "run_id"):
@@ -422,13 +495,21 @@ def experiment_compare(
     experiment_id: list[UUID] = typer.Option(
         ..., help="Repeat for each experiment UUID."
     ),
-    format: str = typer.Option("json", help="json or csv"),
+    format: str = typer.Option("csv", help="csv or json"),
+    layout: str = typer.Option(
+        "wide", help="wide: metrics by experiment; long: original detailed comparison."
+    ),
 ):
     """Compare experiments and save the rendered output under data/experiments."""
     if format not in {"json", "csv"}:
         raise typer.BadParameter("format must be json or csv")
+    if layout not in {"wide", "long"}:
+        raise typer.BadParameter("layout must be wide or long")
     _execute(
-        compare_experiments(experiment_id), output_format=format, save_comparison=True
+        compare_experiments(experiment_id),
+        output_format=format,
+        save_comparison=True,
+        comparison_layout=layout,
     )
 
 

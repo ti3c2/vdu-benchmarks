@@ -59,11 +59,13 @@ Each stage accepts input IDs and returns its run ID as JSON. Logs go to stderr, 
 | `vdu experiment list` | Optional dataset ID and status filters; omit dataset ID to list all experiments |
 | `vdu experiment export` | Optional experiment IDs and dataset filter; writes query-level JSON results |
 | `vdu experiment discard` | Experiment ID; optional completed-run cleanup |
-| `vdu experiment compare` | Experiment IDs |
+| `vdu experiment compare` | Experiment IDs; wide CSV by default, `--layout long` for detailed output |
 | `vdu suite run` | YAML list of complete experiment configurations |
 | `vdu metrics list` | No model or database connection required |
 
-Experiment comparisons are also saved under `data/experiments` with a timestamped filename matching the selected format.
+Experiment comparisons default to a wide CSV: the first column is `metric`, followed by one column per experiment name, in the supplied experiment order. Rows contain dataset-level scores, with missing values left blank. Use `--layout long` for the original detailed comparison including subgroup scores and coverage, or `--format json` for JSON. To inspect the original full JSON with run IDs and configs, use `--layout long --format json`. Comparisons are saved under `data/experiments` as `YYYYMMDD-HHMMSS_comparison_wide.csv` (or `_long`, with the selected format's extension). Compatibility warnings go to stderr.
+
+Wide tables distinguish repeated experiment names using experiment UUIDs. Multiple evaluator configurations for a metric get separate rows labeled with their evaluation keys. If several runs in one experiment supply the same metric and evaluation key, use `--layout long` to inspect them separately.
 
 Successful experiments also save a two-space-indented JSON report with every selected query, ranked document/page hits and chunk text, reference answers, generated answers when available, and per-query metrics. Export existing experiments with `uv run vdu experiment export` (all), or add `--experiment-id EXPERIMENT_UUID`. See [Inspect experiment results](docs/experiment-results.md) for the report structure, Python API, and an [example SQL join](docs/sql/experiment_results.sql).
 
@@ -129,7 +131,7 @@ ragas:
 
 Generation-associated Ragas uses the exact persisted context membership/order. A sole distinct nonempty qrel answer becomes the reference. Multiple different answers are preserved and marked ambiguous rather than silently selecting one. Context-only Ragas can run without generation when an explicit context configuration is supplied.
 
-Every evaluation stores per-query status/value/reason and dataset, language, and rephrase-level aggregates with expected, scored, skipped, and failed counts. Comparison includes standalone evaluations and reports cohort and evaluator compatibility alongside metrics. JSON and CSV identify each evaluation run and its configuration, preserving multiple metric configurations within an experiment. Categorical outputs are retained without inventing numeric averages.
+Every evaluation stores per-query status/value/reason and dataset, language, and rephrase-level aggregates with expected, scored, skipped, and failed counts. Comparison includes standalone evaluations and reports cohort and evaluator compatibility alongside metrics. Detailed comparisons (`--layout long`) identify each evaluation run and its evaluation key in JSON and CSV; JSON also includes configurations. Categorical outputs are retained without inventing numeric averages.
 
 ## Development and tests
 
