@@ -1,0 +1,28 @@
+name: ocr-cached-dense
+dataset_id: ada9f2df-81f9-466f-8fc5-b1912e6169f0
+queries:
+  rephrase_levels: [0]
+preprocess:
+  ocr_text_path: data/processed/20260907-212356_ibm-research-REAL-MM-RAG_FinReport_BEIR_deepseek-ai/i2t/DeepSeek-OCR-2_deepseek-ocr_i2t.csv
+chunking:
+  max_chars: 4000
+  overlap_chars: 0
+embeddings:
+  dense:
+    endpoint:
+      model: qwen/qwen3-embedding-8b
+      base_url: https://openrouter.ai/api/v1
+      api_key_env: OPENAI_EMB_API_KEY
+    space_id: qwen3-embedding-8b-dense-v1
+    modality: text
+    dimensions: 4096
+  batch_size: 256
+corpus_unit: chunk
+retrieval:
+  mode: dense
+  page_top_k: 20
+ir:
+  cutoffs: [1, 5, 10, 20]
+ragas:
+  ragas_max_concurrency: 4
+  metrics: []

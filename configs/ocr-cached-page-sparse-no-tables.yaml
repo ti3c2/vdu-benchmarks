@@ -1,0 +1,27 @@
+# FinReport: reuse the verified cached OCR and original-query embeddings.
+name: ocr-cached-page-sparse-no-tables
+dataset_id: ada9f2df-81f9-466f-8fc5-b1912e6169f0
+queries:
+  rephrase_levels: [0]
+preprocess:
+  ocr_text_path: data/processed/20260907-212356_ibm-research-REAL-MM-RAG_FinReport_BEIR_deepseek-ai/i2t/DeepSeek-OCR-2_deepseek-ocr_i2t.csv
+embeddings:
+  sparse:
+    model: Qdrant/bm25
+    language: english
+    k: 1.2
+    b: 0.75
+    avg_len: 256
+corpus_unit: page
+page_include_tables: false
+retrieval:
+  mode: sparse
+  page_top_k: 20
+ir:
+  cutoffs: [1, 5, 10, 20]
+ragas:
+  ragas_max_concurrency: 4
+  metrics: []
+reuse:
+  representations: 1161d65e-2832-46d8-b006-5316c4bf4bde
+  query_embeddings: 06df1d6e-b813-4879-a6da-6ae749a2ba5c
